@@ -10,3 +10,5 @@ output.mp4
 .pytest_cache/
 temp/
 roblox_viral_*/
+media/
+!media/.gitkeep
