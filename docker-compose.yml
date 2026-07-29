@@ -1,0 +1,11 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD}
+      APP_SECRET: ${APP_SECRET:?set APP_SECRET}
+      MEDIA_ROOT: /app/media
+    volumes:
+      - ./media:/app/media

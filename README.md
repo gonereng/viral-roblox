@@ -46,6 +46,60 @@ Options:
 3. Build **ASS** karaoke captions (yellow active word)
 4. **ffmpeg**: mute + loop video to audio length, center-crop to 9:16, burn captions, mux TTS
 
+## Web app
+
+Browser UI to upload gameplay clips, pick a voice, and generate storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+
+### Local run
+
+```bash
+# Windows
+set APP_PASSWORD=your-password
+set APP_SECRET=your-long-random-secret
+
+# macOS / Linux
+export APP_PASSWORD=your-password
+export APP_SECRET=your-long-random-secret
+
+pip install -e .
+roblox-viral-web
+```
+
+Or with auto-reload:
+
+```bash
+uvicorn roblox_viral.web.app:create_app --factory --reload
+```
+
+Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload a source video in **Library**, then use **Generate**.
+
+Optional env vars:
+
+| Variable | Description |
+|----------|-------------|
+| `MEDIA_ROOT` | Upload/output directory (default: `./media`) |
+| `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
+| `APP_SECRET` | Session signing key (random ephemeral value if unset) |
+
+### Docker
+
+Create a `.env` file (or export vars in your shell):
+
+```bash
+APP_PASSWORD=your-password
+APP_SECRET=your-long-random-secret
+```
+
+Build and run:
+
+```bash
+docker compose up --build
+```
+
+The app listens on http://localhost:8000. Source videos, outputs, and job state persist in `./media` via a bind mount.
+
 ## Design
 
 See [docs/superpowers/specs/2026-07-27-roblox-viral-storytime-design.md](docs/superpowers/specs/2026-07-27-roblox-viral-storytime-design.md).
+
+Web app design: [docs/superpowers/specs/2026-07-29-roblox-viral-webapp-design.md](docs/superpowers/specs/2026-07-29-roblox-viral-webapp-design.md).
