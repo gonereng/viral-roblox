@@ -143,6 +143,28 @@ def test_media_output_requires_auth_and_serves_file(tmp_path, monkeypatch):
     assert r.content == b"video-bytes"
 
 
+def test_generate_page_lists_recent_outputs(tmp_path, monkeypatch):
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr(
+        "roblox_viral.web.app.list_english_voices", fake_voices
+    )
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    settings = c.app.state.settings
+    settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+    (settings.outputs_dir / "older.mp4").write_bytes(b"old")
+    (settings.outputs_dir / "newer.mp4").write_bytes(b"new")
+
+    r = c.get("/")
+    assert r.status_code == 200
+    assert "Recent outputs" in r.text
+    assert "older.mp4" in r.text
+    assert "newer.mp4" in r.text
+    assert "/media/outputs/newer.mp4" in r.text
+
+
 def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
     async def fake_voices():
         return [

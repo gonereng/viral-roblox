@@ -22,6 +22,23 @@ def test_save_list_delete_source(tmp_path, monkeypatch):
     assert library.list_sources(s) == []
 
 
+def test_list_outputs_newest_first(tmp_path, monkeypatch):
+    import os
+    import time
+
+    s = _settings(tmp_path, monkeypatch)
+    older = s.outputs_dir / "older.mp4"
+    newer = s.outputs_dir / "newer.mp4"
+    older.write_bytes(b"old")
+    newer.write_bytes(b"new")
+    now = time.time()
+    os.utime(older, (now - 60, now - 60))
+    os.utime(newer, (now, now))
+
+    listed = library.list_outputs(s)
+    assert [o.name for o in listed] == ["newer.mp4", "older.mp4"]
+
+
 def test_rejects_path_traversal(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     with pytest.raises(ValueError):

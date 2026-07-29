@@ -16,6 +16,13 @@ class SourceVideo:
     size_bytes: int
 
 
+@dataclass(frozen=True)
+class OutputVideo:
+    name: str
+    path: Path
+    size_bytes: int
+
+
 def _safe_name(name: str) -> str:
     base = Path(name).name
     if base != name or not _SAFE_NAME.match(base):
@@ -29,6 +36,16 @@ def list_sources(settings: Settings) -> list[SourceVideo]:
         if path.is_file() and _SAFE_NAME.match(path.name):
             items.append(SourceVideo(path.name, path, path.stat().st_size))
     return items
+
+
+def list_outputs(settings: Settings, *, limit: int = 10) -> list[OutputVideo]:
+    paths = [
+        p
+        for p in settings.outputs_dir.iterdir()
+        if p.is_file() and p.suffix.lower() == ".mp4"
+    ]
+    paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return [OutputVideo(p.name, p, p.stat().st_size) for p in paths[:limit]]
 
 
 def resolve_source(settings: Settings, name: str) -> Path:

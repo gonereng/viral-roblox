@@ -46,6 +46,23 @@
     <video id="player" controls playsinline></video>
     <p><a id="download" href="#" download>Download MP4</a></p>
   </section>
+
+  <section class="recent-outputs">
+    <h2>Recent outputs</h2>
+    {% if recent_outputs %}
+    <ul class="source-list">
+      {% for o in recent_outputs %}
+      <li>
+        <span>{{ o.name }}</span>
+        <span class="meta">{{ o.size_bytes }} bytes</span>
+        <a href="/media/outputs/{{ o.name }}">Play / download</a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p>No outputs yet.</p>
+    {% endif %}
+  </section>
 {% endblock %}
 {% block scripts %}
   <script src="/static/app.js" defer></script>
