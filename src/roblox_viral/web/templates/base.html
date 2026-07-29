@@ -4,13 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Roblox Viral{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header>
-    <a href="/">Roblox Viral</a>
+  {% block header %}
+  <header class="site-header">
+    <a class="brand" href="/">Roblox Viral</a>
+    <nav>
+      <a href="/">Generate</a>
+      <a href="/library">Library</a>
+      <form class="logout" method="post" action="/logout">
+        <button type="submit">Logout</button>
+      </form>
+    </nav>
   </header>
+  {% endblock %}
   <main>
     {% block content %}{% endblock %}
   </main>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

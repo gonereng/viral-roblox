@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Library — Roblox Viral{% endblock %}
+{% block content %}
+  <h1>Library</h1>
+  <p class="lede">Upload gameplay clips for the Generate page.</p>
+
+  {% if error %}
+  <p class="error">{{ error }}</p>
+  {% endif %}
+
+  <form class="upload-form" method="post" action="/library/upload" enctype="multipart/form-data">
+    <label>
+      Video file
+      <input type="file" name="file" accept=".mp4,.mov,.webm,.mkv,video/*" required>
+    </label>
+    <button type="submit">Upload</button>
+  </form>
+
+  <h2>Sources</h2>
+  {% if sources %}
+  <ul class="source-list">
+    {% for s in sources %}
+    <li>
+      <span>{{ s.name }}</span>
+      <span class="meta">{{ s.size_bytes }} bytes</span>
+      <form method="post" action="/library/delete" class="inline-form">
+        <input type="hidden" name="name" value="{{ s.name }}">
+        <button type="submit">Delete</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>No source videos yet.</p>
+  {% endif %}
+{% endblock %}

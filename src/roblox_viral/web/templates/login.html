@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Login — Roblox Viral{% endblock %}
+{% block header %}
+  <header class="site-header">
+    <a class="brand" href="/login">Roblox Viral</a>
+  </header>
+{% endblock %}
 {% block content %}
   <h1>Login</h1>
   {% if error %}
-  <p>{{ error }}</p>
+  <p class="error">{{ error }}</p>
   {% endif %}
   <form method="post" action="/login">
     <label>

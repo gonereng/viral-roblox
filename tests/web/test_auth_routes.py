@@ -1,12 +1,19 @@
 from fastapi.testclient import TestClient
+
 from roblox_viral.web.app import create_app
 from roblox_viral.web.config import Settings
+from roblox_viral.web.voices import VoiceInfo
 
 
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
     monkeypatch.setenv("APP_PASSWORD", "s3cret")
     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
     app = create_app(Settings.from_env())
     return TestClient(app)
 
