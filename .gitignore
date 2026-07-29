@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+output.mp4
+*.mp4
+!examples/**
+.pytest_cache/
+temp/
+roblox_viral_*/
