@@ -103,6 +103,52 @@ def test_get_job_not_found(tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
+def test_create_job_invalid_json_returns_400(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    r = c.post(
+        "/api/jobs",
+        content=b"{not-json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 400
+    assert "Invalid JSON" in r.json()["detail"]
+
+
+def test_get_job_hydrates_from_disk(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    _seed_source(c)
+    settings = c.app.state.settings
+    mgr: JobManager = c.app.state.job_manager
+    job = mgr.create(settings, "clip.mp4", "Persist me.\n", "en-US-EmmaNeural")
+    # Simulate process restart: empty memory, status.json still on disk
+    c.app.state.job_manager = JobManager()
+
+    r = c.get(f"/api/jobs/{job.id}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["id"] == job.id
+    assert data["status"] == "queued"
+    assert data["source_name"] == "clip.mp4"
+
+
+def test_library_upload_rejects_oversize(tmp_path, monkeypatch):
+    from roblox_viral.web import library
+
+    monkeypatch.setattr(library, "MAX_UPLOAD_BYTES", 100)
+
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    upload = c.post(
+        "/library/upload",
+        files={"file": ("clip.mp4", b"x" * 150, "video/mp4")},
+        follow_redirects=False,
+    )
+    assert upload.status_code == 400
+    assert "maximum size" in upload.text.lower() or "exceeds" in upload.text.lower()
+
+
 def test_library_upload_list_delete(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     _login(c)

@@ -38,6 +38,37 @@
     player.src = url;
     download.href = url;
     download.download = outputName;
+    prependRecentOutput(outputName);
+  }
+
+  function prependRecentOutput(outputName) {
+    const section = document.querySelector(".recent-outputs");
+    if (!section) return;
+    let list = section.querySelector("ul.source-list");
+    const empty = section.querySelector(":scope > p");
+    if (!list) {
+      if (empty) empty.remove();
+      list = document.createElement("ul");
+      list.className = "source-list";
+      section.appendChild(list);
+    }
+    for (const li of [...list.querySelectorAll("li")]) {
+      const label = li.querySelector("span");
+      if (label && label.textContent === outputName) {
+        li.remove();
+      }
+    }
+    const li = document.createElement("li");
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = outputName;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = "new";
+    const link = document.createElement("a");
+    link.href = `/media/outputs/${encodeURIComponent(outputName)}`;
+    link.textContent = "Play / download";
+    li.append(nameSpan, meta, link);
+    list.prepend(li);
   }
 
   async function pollJob(jobId) {

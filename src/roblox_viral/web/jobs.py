@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -15,6 +16,9 @@ from roblox_viral.web.config import Settings
 from roblox_viral.web.library import resolve_source
 
 JobStatus = Literal["queued", "synthesizing", "captioning", "rendering", "done", "error"]
+
+# uuid4().hex — reject path traversal / odd filenames
+_SAFE_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
 
 class BusyError(Exception):
@@ -79,8 +83,43 @@ class JobManager:
             raise
         return record
 
-    def get(self, job_id: str) -> JobRecord | None:
-        return self._jobs.get(job_id)
+    def get(self, job_id: str, settings: Settings | None = None) -> JobRecord | None:
+        with self._lock:
+            cached = self._jobs.get(job_id)
+            if cached is not None:
+                return cached
+
+        if settings is None or not _SAFE_JOB_ID.fullmatch(job_id):
+            return None
+
+        jobs_root = settings.jobs_dir.resolve()
+        status_path = (settings.jobs_dir / job_id / "status.json").resolve()
+        if not status_path.is_relative_to(jobs_root) or not status_path.is_file():
+            return None
+
+        try:
+            data = json.loads(status_path.read_text(encoding="utf-8"))
+            record = JobRecord(
+                id=str(data["id"]),
+                status=data["status"],
+                error=data.get("error"),
+                source_name=str(data["source_name"]),
+                voice=str(data["voice"]),
+                output_name=data.get("output_name"),
+                created_at=str(data["created_at"]),
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return None
+
+        if record.id != job_id or not _SAFE_JOB_ID.fullmatch(record.id):
+            return None
+
+        with self._lock:
+            existing = self._jobs.get(job_id)
+            if existing is not None:
+                return existing
+            self._jobs[job_id] = record
+            return record
 
     def run_job(self, settings: Settings, job_id: str) -> None:
         record = self._jobs.get(job_id)

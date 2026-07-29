@@ -43,3 +43,10 @@ def test_rejects_path_traversal(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     with pytest.raises(ValueError):
         library.resolve_source(s, "../evil.mp4")
+
+
+def test_save_upload_rejects_oversize(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(library, "MAX_UPLOAD_BYTES", 10)
+    with pytest.raises(ValueError, match="maximum size"):
+        library.save_upload(s, "clip.mp4", b"x" * 11)

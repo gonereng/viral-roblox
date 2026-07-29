@@ -124,3 +124,37 @@ def test_create_succeeds_after_error(tmp_path, monkeypatch):
     j2 = mgr.create(s, "clip.mp4", "Retry after error.\n", "en-US-EmmaNeural")
     assert j2.status == "queued"
     assert j2.id != job.id
+
+
+def test_get_hydrates_from_disk(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    job = mgr.create(s, "clip.mp4", "Hello world.\n", "en-US-EmmaNeural")
+    job_id = job.id
+    status_path = s.jobs_dir / job_id / "status.json"
+    assert status_path.is_file()
+
+    cold = JobManager()
+    assert cold.get(job_id) is None
+    loaded = cold.get(job_id, s)
+    assert loaded is not None
+    assert loaded.id == job_id
+    assert loaded.status == "queued"
+    assert loaded.source_name == "clip.mp4"
+    # Registered in memory after hydrate
+    assert cold.get(job_id) is loaded
+
+
+def test_get_rejects_unsafe_job_id(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    assert mgr.get("../etc/passwd", s) is None
+    assert mgr.get("not-a-uuid", s) is None
+    assert mgr.get("", s) is None
+
+
+def test_get_missing_status_returns_none(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    missing = "a" * 32
+    assert mgr.get(missing, s) is None

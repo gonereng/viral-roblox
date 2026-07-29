@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import secrets
 from dataclasses import asdict
 from pathlib import Path
@@ -17,12 +18,14 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, ValidationError
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_303_SEE_OTHER, HTTP_409_CONFLICT
 
 from roblox_viral.web.auth import require_login, set_authenticated
 from roblox_viral.web.config import Settings, get_settings
 from roblox_viral.web.jobs import BusyError, JobManager
+from roblox_viral.web import library as library_mod
 from roblox_viral.web.library import delete_source, list_outputs, list_sources, save_upload
 from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
 
@@ -30,6 +33,33 @@ WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = WEB_DIR / "templates"
 STATIC_DIR = WEB_DIR / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+_UPLOAD_CHUNK = 1024 * 1024  # 1 MiB
+
+
+class CreateJobBody(BaseModel):
+    source_name: str = ""
+    story: str = ""
+    voice: str | None = None
+
+
+async def _read_upload_capped(
+    file: UploadFile, max_bytes: int | None = None
+) -> bytes:
+    limit = library_mod.MAX_UPLOAD_BYTES if max_bytes is None else max_bytes
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise ValueError(
+                f"Upload exceeds maximum size of {limit} bytes"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -128,8 +158,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> Response:
         settings = request.app.state.settings
         filename = file.filename or ""
-        data = await file.read()
         try:
+            data = await _read_upload_capped(file)
             save_upload(settings, filename, data)
         except ValueError as exc:
             return templates.TemplateResponse(
@@ -172,10 +202,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict:
         settings = request.app.state.settings
         mgr: JobManager = request.app.state.job_manager
-        body = await request.json()
-        source_name = body.get("source_name", "")
-        story = body.get("story", "")
-        voice = body.get("voice") or DEFAULT_VOICE
+        try:
+            raw = await request.body()
+            body = CreateJobBody.model_validate_json(raw)
+        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail="Invalid JSON body"
+            ) from exc
+        source_name = body.source_name
+        story = body.story
+        voice = body.voice or DEFAULT_VOICE
         try:
             record = mgr.create(settings, source_name, story, voice)
         except BusyError as exc:
@@ -194,8 +230,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         _: None = Depends(require_login),
     ) -> dict:
+        settings = request.app.state.settings
         mgr: JobManager = request.app.state.job_manager
-        record = mgr.get(job_id)
+        record = mgr.get(job_id, settings)
         if record is None:
             raise HTTPException(status_code=404, detail="Job not found")
         return asdict(record)
@@ -211,7 +248,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if safe != name or not safe:
             raise HTTPException(status_code=400, detail="Invalid filename")
         path = (settings.outputs_dir / safe).resolve()
-        if not str(path).startswith(str(settings.outputs_dir.resolve())):
+        if not path.is_relative_to(settings.outputs_dir.resolve()):
             raise HTTPException(status_code=400, detail="Invalid path")
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Not found")

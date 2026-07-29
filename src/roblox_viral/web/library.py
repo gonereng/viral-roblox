@@ -7,6 +7,7 @@ from pathlib import Path
 from roblox_viral.web.config import Settings
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._ -]+\.(mp4|mov|webm|mkv)$", re.I)
+MAX_UPLOAD_BYTES = 500_000_000
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ def list_outputs(settings: Settings, *, limit: int = 10) -> list[OutputVideo]:
 def resolve_source(settings: Settings, name: str) -> Path:
     safe = _safe_name(name)
     path = (settings.sources_dir / safe).resolve()
-    if not str(path).startswith(str(settings.sources_dir.resolve())):
+    if not path.is_relative_to(settings.sources_dir.resolve()):
         raise ValueError("Invalid path")
     if not path.is_file():
         raise FileNotFoundError(safe)
@@ -59,6 +60,10 @@ def resolve_source(settings: Settings, name: str) -> Path:
 
 
 def save_upload(settings: Settings, filename: str, data: bytes) -> SourceVideo:
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"Upload exceeds maximum size of {MAX_UPLOAD_BYTES} bytes"
+        )
     safe = _safe_name(filename)
     path = settings.sources_dir / safe
     path.write_bytes(data)
