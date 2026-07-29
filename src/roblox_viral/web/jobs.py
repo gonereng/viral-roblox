@@ -5,7 +5,6 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
 
 from roblox_viral.captions import write_ass
@@ -67,9 +66,17 @@ class JobManager:
             self._stories[job_id] = story
             self._active_id = job_id
 
-        job_dir = settings.jobs_dir / job_id
-        job_dir.mkdir(parents=True, exist_ok=True)
-        self._persist(settings, record)
+        try:
+            job_dir = settings.jobs_dir / job_id
+            job_dir.mkdir(parents=True, exist_ok=True)
+            self._persist(settings, record)
+        except Exception:
+            with self._lock:
+                if self._active_id == job_id:
+                    self._active_id = None
+                self._jobs.pop(job_id, None)
+                self._stories.pop(job_id, None)
+            raise
         return record
 
     def get(self, job_id: str) -> JobRecord | None:
