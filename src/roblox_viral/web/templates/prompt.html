@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Prompt — Roblox Viral{% endblock %}
+{% block content %}
+  <h1>Prompt</h1>
+  <p class="lede">
+    Edit the Gemini prompt used by <strong>Generate story</strong> on the Generate page.
+    Saved to the media folder and kept across restarts.
+  </p>
+
+  {% if error %}
+  <p class="error">{{ error }}</p>
+  {% endif %}
+  {% if message %}
+  <p class="ok">{{ message }}</p>
+  {% endif %}
+
+  <form class="prompt-form" method="post" action="/prompt">
+    <label>
+      Gemini prompt
+      <textarea id="prompt" name="prompt" rows="16" required>{{ prompt }}</textarea>
+    </label>
+    <button type="submit">Save prompt</button>
+  </form>
+{% endblock %}

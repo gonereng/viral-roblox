@@ -27,6 +27,7 @@ from roblox_viral.web.config import Settings, get_settings
 from roblox_viral.web.jobs import BusyError, JobManager
 from roblox_viral.web import library as library_mod
 from roblox_viral.web.library import delete_source, list_outputs, list_sources, save_upload
+from roblox_viral.web.prompt import load_prompt, save_prompt
 from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -193,6 +194,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=400,
             )
         return RedirectResponse("/library", status_code=HTTP_303_SEE_OTHER)
+
+    @app.get("/prompt", response_class=HTMLResponse)
+    def prompt_page(
+        request: Request,
+        _: None = Depends(require_login),
+    ) -> HTMLResponse:
+        settings = request.app.state.settings
+        return templates.TemplateResponse(
+            request,
+            "prompt.html",
+            {
+                "prompt": load_prompt(settings),
+                "error": None,
+                "message": None,
+            },
+        )
+
+    @app.post("/prompt", response_model=None)
+    async def prompt_save(
+        request: Request,
+        prompt: str = Form(...),
+        _: None = Depends(require_login),
+    ) -> Response:
+        settings = request.app.state.settings
+        try:
+            save_prompt(settings, prompt)
+        except ValueError as exc:
+            return templates.TemplateResponse(
+                request,
+                "prompt.html",
+                {
+                    "prompt": prompt,
+                    "error": str(exc),
+                    "message": None,
+                },
+                status_code=400,
+            )
+        return templates.TemplateResponse(
+            request,
+            "prompt.html",
+            {
+                "prompt": load_prompt(settings),
+                "error": None,
+                "message": "Prompt saved.",
+            },
+        )
 
     @app.post("/api/jobs")
     async def create_job(
