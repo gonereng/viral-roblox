@@ -14,6 +14,7 @@ class Settings:
     app_password: str
     app_secret: str
     require_password: bool = True
+    gemini_api_key: str = ""
 
     @property
     def sources_dir(self) -> Path:
@@ -26,6 +27,10 @@ class Settings:
     @property
     def jobs_dir(self) -> Path:
         return self.media_root / "jobs"
+
+    @property
+    def prompt_path(self) -> Path:
+        return self.media_root / "prompt.txt"
 
     def ensure_media_dirs(self) -> None:
         for d in (self.sources_dir, self.outputs_dir, self.jobs_dir):
@@ -42,7 +47,14 @@ class Settings:
         if not secret:
             secret = secrets.token_hex(32)
             warnings.warn("APP_SECRET unset; using ephemeral secret (sessions reset on restart)", stacklevel=2)
-        return cls(media_root=media, app_password=password, app_secret=secret, require_password=require)
+        gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+        return cls(
+            media_root=media,
+            app_password=password,
+            app_secret=secret,
+            require_password=require,
+            gemini_api_key=gemini_api_key,
+        )
 
 
 @lru_cache
