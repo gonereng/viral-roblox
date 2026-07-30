@@ -13,3 +13,5 @@ roblox_viral_*/
 media/**/*
 !media/**/
 !media/**/.gitkeep
+
+.worktrees/

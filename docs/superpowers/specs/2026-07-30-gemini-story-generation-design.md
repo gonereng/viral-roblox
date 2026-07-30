@@ -40,7 +40,7 @@ Browser
 
 - `Settings.gemini_api_key` loaded from `GEMINI_API_KEY` (empty string if unset)
 - Document in README; pass through `docker-compose` (placeholder/empty ok; real key via env override)
-- Model: `gemini-2.0-flash` via Gemini generateContent REST
+- Model: `gemini-2.5-flash` via Gemini generateContent REST (`gemini-2.0-flash` is shut down)
 
 ### Storage layout (addition)
 
