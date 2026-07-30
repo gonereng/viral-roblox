@@ -89,6 +89,7 @@ Create a `.env` file (or export vars in your shell):
 ```bash
 APP_PASSWORD=your-password
 APP_SECRET=your-long-random-secret
+GEMINI_API_KEY=
 ```
 
 Build and run:
