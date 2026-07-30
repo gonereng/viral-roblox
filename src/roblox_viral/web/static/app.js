@@ -1,4 +1,41 @@
 (() => {
+  const storyEl = document.getElementById("story");
+  const storyBtn = document.getElementById("generate-story-btn");
+  const storyErr = document.getElementById("story-gen-error");
+
+  if (storyBtn && storyEl) {
+    storyBtn.addEventListener("click", async () => {
+      if (storyErr) {
+        storyErr.hidden = true;
+        storyErr.textContent = "";
+      }
+      storyBtn.disabled = true;
+      try {
+        const res = await fetch("/api/generate-story", {
+          method: "POST",
+          headers: { Accept: "application/json" },
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = body.detail || `Generate story failed (${res.status})`;
+          if (storyErr) {
+            storyErr.hidden = false;
+            storyErr.textContent = msg;
+          }
+          return;
+        }
+        storyEl.value = body.story || "";
+      } catch (err) {
+        if (storyErr) {
+          storyErr.hidden = false;
+          storyErr.textContent = err.message || String(err);
+        }
+      } finally {
+        storyBtn.disabled = false;
+      }
+    });
+  }
+
   const form = document.getElementById("generate-form");
   if (!form) return;
 

@@ -4,8 +4,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD}
-      APP_SECRET: ${APP_SECRET:?set APP_SECRET}
+      APP_PASSWORD: password
+      APP_SECRET: fjdisofhdsuifhdsuifhdsiufhdsifhdu
       MEDIA_ROOT: /app/media
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - ./media:/app/media

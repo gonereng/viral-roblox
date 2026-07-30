@@ -48,7 +48,7 @@ Options:
 
 ## Web app
 
-Browser UI to upload gameplay clips, pick a voice, and generate storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+Browser UI to upload gameplay clips, edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
 
 ### Local run
 
@@ -80,6 +80,7 @@ Optional env vars:
 | `MEDIA_ROOT` | Upload/output directory (default: `./media`) |
 | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
 | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
+| `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
 
 ### Docker
 
@@ -103,3 +104,5 @@ The app listens on http://localhost:8000. Source videos, outputs, and job state 
 See [docs/superpowers/specs/2026-07-27-roblox-viral-storytime-design.md](docs/superpowers/specs/2026-07-27-roblox-viral-storytime-design.md).
 
 Web app design: [docs/superpowers/specs/2026-07-29-roblox-viral-webapp-design.md](docs/superpowers/specs/2026-07-29-roblox-viral-webapp-design.md).
+
+Gemini story generation: [docs/superpowers/specs/2026-07-30-gemini-story-generation-design.md](docs/superpowers/specs/2026-07-30-gemini-story-generation-design.md).

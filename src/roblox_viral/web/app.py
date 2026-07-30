@@ -24,6 +24,7 @@ from starlette.status import HTTP_303_SEE_OTHER, HTTP_409_CONFLICT
 
 from roblox_viral.web.auth import require_login, set_authenticated
 from roblox_viral.web.config import Settings, get_settings
+from roblox_viral.web.gemini import generate_story
 from roblox_viral.web.jobs import BusyError, JobManager
 from roblox_viral.web import library as library_mod
 from roblox_viral.web.library import delete_source, list_outputs, list_sources, save_upload
@@ -240,6 +241,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "message": "Prompt saved.",
             },
         )
+
+    @app.post("/api/generate-story")
+    async def api_generate_story(
+        request: Request,
+        _: None = Depends(require_login),
+    ) -> dict:
+        settings = request.app.state.settings
+        if not settings.gemini_api_key.strip():
+            raise HTTPException(
+                status_code=503,
+                detail="GEMINI_API_KEY is not configured",
+            )
+        prompt = load_prompt(settings).strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+        try:
+            story = await generate_story(settings.gemini_api_key, prompt)
+        except ValueError as exc:
+            msg = str(exc)
+            status = 503 if "GEMINI_API_KEY" in msg else 400
+            raise HTTPException(status_code=status, detail=msg) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"story": story}
 
     @app.post("/api/jobs")
     async def create_job(
