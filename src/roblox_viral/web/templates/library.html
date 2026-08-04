@@ -3,8 +3,9 @@
 {% block content %}
   <h1>Library</h1>
   <p class="lede">
-    Upload a gameplay clip. It is split into <strong>1-minute slices</strong>
-    named <code>name-1.mp4</code>, <code>name-2.mp4</code>, …
+    Upload a gameplay clip or import from YouTube. Clips are split into
+    <strong>1-minute slices</strong> named <code>name-1.mp4</code>,
+    <code>name-2.mp4</code>, …
     A leftover shorter than 1 minute is discarded.
     Pick a slice on the Generate page.
   </p>
@@ -24,7 +25,26 @@
     <button type="submit">Upload</button>
   </form>
 
-  <h2>Sources</h2>
+  <h2>Import from YouTube</h2>
+  <form id="youtube-form" class="upload-form">
+    <label>
+      YouTube URL
+      <input id="youtube_url" name="url" type="url" required placeholder="https://www.youtube.com/watch?v=...">
+    </label>
+    <label>
+      Name (slice prefix)
+      <input id="youtube_name" name="name" type="text" required placeholder="gameplay" pattern="[A-Za-z0-9._ \-]+" title="Letters, numbers, spaces, . _ -">
+    </label>
+    <button id="youtube-btn" type="submit">Import from YouTube</button>
+  </form>
+
+  <section class="progress" aria-live="polite">
+    <p>Import status: <span id="yt-status">idle</span></p>
+    <p id="yt-error" class="error" hidden></p>
+    <p id="yt-message" class="ok" hidden></p>
+  </section>
+
+  <h2>Sources (1-minute slices)</h2>
   {% if sources %}
   <ul class="source-list">
     {% for s in sources %}
@@ -41,4 +61,7 @@
   {% else %}
   <p>No source videos yet.</p>
   {% endif %}
+{% endblock %}
+{% block scripts %}
+  <script src="/static/library.js" defer></script>
 {% endblock %}

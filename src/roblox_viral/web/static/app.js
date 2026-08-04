@@ -161,7 +161,7 @@
       if (res.status === 409) {
         generateBtn.disabled = false;
         setStatus("busy");
-        showError(body.detail || "A render job is already in progress");
+        showError(body.detail || "A job is already in progress");
         return;
       }
       if (!res.ok) {

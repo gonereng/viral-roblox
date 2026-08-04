@@ -48,7 +48,7 @@ Options:
 
 ## Web app
 
-Browser UI to upload gameplay clips, edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+Browser UI to upload gameplay clips or import a YouTube URL on **Library** (background job; best MP4 ≤1080p; split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI (and `yt-dlp`, installed with the package).
 
 ### Local run
 
@@ -71,7 +71,7 @@ Or with auto-reload:
 uvicorn roblox_viral.web.app:create_app --factory --reload
 ```
 
-Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload a source video in **Library**, then use **Generate**.
+Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload or YouTube-import a source in **Library**, then use **Generate**.
 
 Optional env vars:
 
