@@ -13,9 +13,27 @@ from roblox_viral.render import render_video
 from roblox_viral.story import join_for_tts, split_sentences
 from roblox_viral.voice import EdgeTTSProvider
 from roblox_viral.web.config import Settings
-from roblox_viral.web.library import resolve_source
+from roblox_viral.web.library import (
+    make_output_name,
+    resolve_source,
+    slice_into_minute_parts,
+)
+from roblox_viral.web.youtube import (
+    download_youtube,
+    validate_stem,
+    validate_youtube_url,
+)
 
-JobStatus = Literal["queued", "synthesizing", "captioning", "rendering", "done", "error"]
+JobStatus = Literal[
+    "queued",
+    "synthesizing",
+    "captioning",
+    "rendering",
+    "downloading",
+    "slicing",
+    "done",
+    "error",
+]
 
 # uuid4().hex — reject path traversal / odd filenames
 _SAFE_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -34,6 +52,10 @@ class JobRecord:
     voice: str
     output_name: str | None
     created_at: str
+    kind: str = "render"  # "render" | "youtube"
+    url: str | None = None
+    stem: str | None = None
+    created_slices: list[str] | None = None
 
 
 class JobManager:
@@ -55,7 +77,7 @@ class JobManager:
 
         with self._lock:
             if self._active_id is not None:
-                raise BusyError("A render job is already in progress")
+                raise BusyError("A job is already in progress")
             job_id = uuid.uuid4().hex
             record = JobRecord(
                 id=job_id,
@@ -65,6 +87,7 @@ class JobManager:
                 voice=voice,
                 output_name=None,
                 created_at=datetime.now(timezone.utc).isoformat(),
+                kind="render",
             )
             self._jobs[job_id] = record
             self._stories[job_id] = story
@@ -80,6 +103,41 @@ class JobManager:
                     self._active_id = None
                 self._jobs.pop(job_id, None)
                 self._stories.pop(job_id, None)
+            raise
+        return record
+
+    def create_youtube(self, settings: Settings, url: str, stem: str) -> JobRecord:
+        safe_url = validate_youtube_url(url)
+        safe_stem = validate_stem(stem)
+
+        with self._lock:
+            if self._active_id is not None:
+                raise BusyError("A job is already in progress")
+            job_id = uuid.uuid4().hex
+            record = JobRecord(
+                id=job_id,
+                status="queued",
+                error=None,
+                source_name="",
+                voice="",
+                output_name=None,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                kind="youtube",
+                url=safe_url,
+                stem=safe_stem,
+                created_slices=None,
+            )
+            self._jobs[job_id] = record
+            self._active_id = job_id
+
+        try:
+            (settings.jobs_dir / job_id).mkdir(parents=True, exist_ok=True)
+            self._persist(settings, record)
+        except Exception:
+            with self._lock:
+                if self._active_id == job_id:
+                    self._active_id = None
+                self._jobs.pop(job_id, None)
             raise
         return record
 
@@ -103,10 +161,14 @@ class JobManager:
                 id=str(data["id"]),
                 status=data["status"],
                 error=data.get("error"),
-                source_name=str(data["source_name"]),
-                voice=str(data["voice"]),
+                source_name=str(data.get("source_name") or ""),
+                voice=str(data.get("voice") or ""),
                 output_name=data.get("output_name"),
                 created_at=str(data["created_at"]),
+                kind=str(data.get("kind") or "render"),
+                url=data.get("url"),
+                stem=data.get("stem"),
+                created_slices=data.get("created_slices"),
             )
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
@@ -137,7 +199,7 @@ class JobManager:
             job_dir.mkdir(parents=True, exist_ok=True)
             narration_path = job_dir / "narration.mp3"
             ass_path = job_dir / "captions.ass"
-            output_name = f"{job_id}.mp4"
+            output_name = make_output_name(record.source_name)
             output_path = settings.outputs_dir / output_name
 
             self._set_status(settings, record, "synthesizing")
@@ -163,6 +225,31 @@ class JobManager:
             record.error = str(exc)
             self._set_status(settings, record, "error")
         finally:
+            with self._lock:
+                if self._active_id == job_id:
+                    self._active_id = None
+
+    def run_youtube_job(self, settings: Settings, job_id: str) -> None:
+        record = self._jobs.get(job_id)
+        if record is None:
+            raise KeyError(f"Unknown job: {job_id}")
+        job_dir = settings.jobs_dir / job_id
+        download_path = job_dir / "download.mp4"
+        try:
+            self._set_status(settings, record, "downloading")
+            download_youtube(record.url or "", download_path)
+
+            self._set_status(settings, record, "slicing")
+            slices = slice_into_minute_parts(
+                settings, download_path, record.stem or "video"
+            )
+            record.created_slices = [s.name for s in slices]
+            self._set_status(settings, record, "done")
+        except Exception as exc:
+            record.error = str(exc)
+            self._set_status(settings, record, "error")
+        finally:
+            download_path.unlink(missing_ok=True)
             with self._lock:
                 if self._active_id == job_id:
                     self._active_id = None

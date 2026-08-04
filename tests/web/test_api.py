@@ -150,6 +150,19 @@ def test_library_upload_rejects_oversize(tmp_path, monkeypatch):
 
 
 def test_library_upload_list_delete(tmp_path, monkeypatch):
+    from roblox_viral.web.library import SourceVideo
+
+    def fake_save(settings, filename, data):
+        name = "clip-1.mp4"
+        path = settings.sources_dir / name
+        path.write_bytes(data)
+        return [SourceVideo(name, path, path.stat().st_size)]
+
+    monkeypatch.setattr(
+        "roblox_viral.web.app.save_upload",
+        fake_save,
+    )
+
     c = _client(tmp_path, monkeypatch)
     _login(c)
 
@@ -158,20 +171,20 @@ def test_library_upload_list_delete(tmp_path, monkeypatch):
         files={"file": ("clip.mp4", b"fake-bytes", "video/mp4")},
         follow_redirects=False,
     )
-    assert upload.status_code in (302, 303)
-    assert "/library" in upload.headers["location"]
+    assert upload.status_code == 200
+    assert "clip-1.mp4" in upload.text
 
     page = c.get("/library")
     assert page.status_code == 200
-    assert "clip.mp4" in page.text
+    assert "clip-1.mp4" in page.text
 
     deleted = c.post(
         "/library/delete",
-        data={"name": "clip.mp4"},
+        data={"name": "clip-1.mp4"},
         follow_redirects=False,
     )
     assert deleted.status_code in (302, 303)
-    assert "clip.mp4" not in c.get("/library").text
+    assert "clip-1.mp4" not in c.get("/library").text
 
 
 def test_media_output_requires_auth_and_serves_file(tmp_path, monkeypatch):

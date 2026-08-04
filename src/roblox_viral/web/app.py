@@ -149,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {
                 "sources": list_sources(settings),
                 "error": None,
+                "message": None,
             },
         )
 
@@ -162,7 +163,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         filename = file.filename or ""
         try:
             data = await _read_upload_capped(file)
-            save_upload(settings, filename, data)
+            slices = save_upload(settings, filename, data)
         except ValueError as exc:
             return templates.TemplateResponse(
                 request,
@@ -170,10 +171,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 {
                     "sources": list_sources(settings),
                     "error": str(exc),
+                    "message": None,
                 },
                 status_code=400,
             )
-        return RedirectResponse("/library", status_code=HTTP_303_SEE_OTHER)
+        names = ", ".join(s.name for s in slices)
+        return templates.TemplateResponse(
+            request,
+            "library.html",
+            {
+                "sources": list_sources(settings),
+                "error": None,
+                "message": (
+                    f"Created {len(slices)} one-minute slice(s): {names}. "
+                    "A leftover under 1 minute was discarded if present."
+                ),
+            },
+        )
 
     @app.post("/library/delete", response_model=None)
     def library_delete(
@@ -191,6 +205,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 {
                     "sources": list_sources(settings),
                     "error": str(exc),
+                    "message": None,
                 },
                 status_code=400,
             )
