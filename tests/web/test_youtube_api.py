@@ -41,7 +41,7 @@ def test_youtube_import_rejects_bad_name(tmp_path, monkeypatch):
 
 
 def test_youtube_import_success(tmp_path, monkeypatch):
-    def fake_download(url: str, dest: Path) -> Path:
+    def fake_download(url: str, dest: Path, **kwargs) -> Path:
         dest.write_bytes(b"vid")
         return dest
 
