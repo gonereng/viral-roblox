@@ -8,6 +8,24 @@ from functools import lru_cache
 from pathlib import Path
 
 
+def resolve_overlay_video_path(
+    media_root: Path | None = None,
+    overlay_video: str | None = None,
+) -> Path | None:
+    """Return greenscreen overlay path if the file exists."""
+    env_path = (
+        overlay_video
+        if overlay_video is not None
+        else os.environ.get("OVERLAY_VIDEO", "")
+    ).strip()
+    if env_path:
+        path = Path(env_path).expanduser()
+        return path if path.is_file() else None
+    root = media_root if media_root is not None else Path(os.environ.get("MEDIA_ROOT", "media"))
+    default = Path(root) / "overlay.mp4"
+    return default if default.is_file() else None
+
+
 @dataclass(frozen=True)
 class Settings:
     media_root: Path
@@ -46,11 +64,7 @@ class Settings:
     @property
     def overlay_video_path(self) -> Path | None:
         """Greenscreen intro overlay MP4, if configured or present under media/."""
-        if self.overlay_video.strip():
-            path = Path(self.overlay_video).expanduser()
-            return path if path.is_file() else None
-        default = self.media_root / "overlay.mp4"
-        return default if default.is_file() else None
+        return resolve_overlay_video_path(self.media_root, self.overlay_video)
 
     def ensure_media_dirs(self) -> None:
         for d in (self.sources_dir, self.outputs_dir, self.jobs_dir):

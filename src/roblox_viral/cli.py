@@ -12,6 +12,7 @@ from roblox_viral.captions import write_ass
 from roblox_viral.render import RenderError, render_video, require_ffmpeg
 from roblox_viral.story import join_for_tts, resolve_story_sentences
 from roblox_viral.voice import EdgeTTSProvider
+from roblox_viral.web.config import resolve_overlay_video_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,6 +89,7 @@ def run(argv: list[str] | None = None) -> int:
                 output_path=args.out,
                 keep_temp=args.keep_temp,
                 work_dir=temp_dir,
+                overlay_path=resolve_overlay_video_path(),
             )
             print(f"Done: {args.out.resolve()}")
             return 0

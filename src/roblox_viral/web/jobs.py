@@ -217,6 +217,7 @@ class JobManager:
                 ass_path=ass_path,
                 output_path=output_path,
                 work_dir=job_dir,
+                overlay_path=settings.overlay_video_path,
             )
 
             record.output_name = output_name
@@ -237,7 +238,11 @@ class JobManager:
         download_path = job_dir / "download.mp4"
         try:
             self._set_status(settings, record, "downloading")
-            download_youtube(record.url or "", download_path)
+            download_youtube(
+                record.url or "",
+                download_path,
+                cookies_path=settings.youtube_cookies_path,
+            )
 
             self._set_status(settings, record, "slicing")
             slices = slice_into_minute_parts(
@@ -250,6 +255,7 @@ class JobManager:
             self._set_status(settings, record, "error")
         finally:
             download_path.unlink(missing_ok=True)
+            download_path.with_suffix("").unlink(missing_ok=True)
             with self._lock:
                 if self._active_id == job_id:
                     self._active_id = None
