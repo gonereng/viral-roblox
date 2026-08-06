@@ -10,6 +10,11 @@ from pathlib import Path
 
 OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
+OVERLAY_DURATION_S = 3.5
+OVERLAY_HEIGHT = OUTPUT_HEIGHT // 2
+OVERLAY_CHROMA_COLOR = "0x00FE00"
+OVERLAY_CHROMA_SIMILARITY = "0.30"
+OVERLAY_CHROMA_BLEND = "0.10"
 
 
 class RenderError(RuntimeError):
@@ -75,9 +80,13 @@ def render_video(
     output_path: Path | str,
     keep_temp: bool = False,
     work_dir: Path | str | None = None,
+    overlay_path: Path | str | None = None,
 ) -> Path:
     """
     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
+
+    When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
+    composite it centered (half frame height) over captions at the start.
 
     Original video audio is discarded by mapping only the TTS audio stream.
     Intermediate files live under work_dir when provided; otherwise only final out is kept
@@ -97,50 +106,102 @@ def render_video(
     if not ass.is_file():
         raise RenderError(f"Captions not found: {ass}")
 
+    overlay: Path | None = None
+    if overlay_path is not None:
+        overlay = Path(overlay_path)
+        if not overlay.is_file():
+            raise RenderError(f"Overlay video not found: {overlay}")
+
     out.parent.mkdir(parents=True, exist_ok=True)
     if work_dir is not None:
         Path(work_dir).mkdir(parents=True, exist_ok=True)
 
     audio_duration = probe_duration_seconds(audio)
     ass_escaped = _ass_filter_path(ass)
-    vf = (
-        f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
-        f"ass='{ass_escaped}'"
-    )
 
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-stream_loop",
-        "-1",
-        "-i",
-        str(video),
-        "-i",
-        str(audio),
-        "-t",
-        f"{audio_duration:.3f}",
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-vf",
-        vf,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "18",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-shortest",
-        "-movflags",
-        "+faststart",
-        str(out),
-    ]
+    if overlay is None:
+        vf = (
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+            f"ass='{ass_escaped}'"
+        )
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(video),
+            "-i",
+            str(audio),
+            "-t",
+            f"{audio_duration:.3f}",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-vf",
+            vf,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(out),
+        ]
+    else:
+        fc = (
+            f"[0:v]scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}[base];"
+            f"[base]ass='{ass_escaped}'[cap];"
+            f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
+            f"format=yuva420p,scale=-2:{OVERLAY_HEIGHT}[ov];"
+            f"[cap][ov]overlay=(W-w)/2:(H-h)/2:enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[outv]"
+        )
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(video),
+            "-i",
+            str(audio),
+            "-t",
+            f"{OVERLAY_DURATION_S}",
+            "-i",
+            str(overlay),
+            "-t",
+            f"{audio_duration:.3f}",
+            "-filter_complex",
+            fc,
+            "-map",
+            "[outv]",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(out),
+        ]
 
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
     if result.returncode != 0:
