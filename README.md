@@ -73,6 +73,8 @@ uvicorn roblox_viral.web.app:create_app --factory --reload
 
 Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload or YouTube-import a source in **Library**, then use **Generate**.
 
+If YouTube shows a bot check (“Sign in to confirm you’re not a bot”), export cookies from a logged-in browser session to `media/youtube_cookies.txt` (Netscape format). Extensions such as “Get cookies.txt LOCALLY” work; or set `YOUTUBE_COOKIES` to that file path. Keep the file private — it authenticates as your account.
+
 Optional env vars:
 
 | Variable | Description |
@@ -81,6 +83,8 @@ Optional env vars:
 | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
 | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
 | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
+| `YOUTUBE_COOKIES` | Optional path to a Netscape `cookies.txt` for YouTube imports (bot checks). If unset, `MEDIA_ROOT/youtube_cookies.txt` is used when present. |
+| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, `MEDIA_ROOT/overlay.mp4` is used when present. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
 
 ### Docker
 
