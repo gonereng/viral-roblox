@@ -85,7 +85,8 @@ def test_render_video_with_overlay_uses_filter_complex(tmp_path, monkeypatch):
     assert "eof_action=pass" in cmd
     assert str(overlay) in seen["cmd"]
     idx = seen["cmd"].index(str(overlay))
-    assert seen["cmd"][idx - 2 : idx] in (["-t", "3.5"], ["-t", "3.500"])
+    assert seen["cmd"][idx - 1] == "-i"
+    assert seen["cmd"][idx - 3 : idx - 1] in (["-t", "3.5"], ["-t", "3.500"])
     assert "-map" in seen["cmd"]
     assert "[outv]" in seen["cmd"]
     assert "1:a:0" in seen["cmd"]
