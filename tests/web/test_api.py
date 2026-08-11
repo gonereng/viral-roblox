@@ -267,7 +267,7 @@ def test_create_job_rejects_bad_pitch(tmp_path, monkeypatch):
             "source_name": "clip.mp4",
             "story": "Hi.\n",
             "voice": "en-US-EmmaNeural",
-            "pitch": 99,
+            "pitch": 101,
             "speed": 130,
         },
     )

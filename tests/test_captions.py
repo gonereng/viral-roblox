@@ -52,6 +52,62 @@ def test_partition_by_sentences():
     assert [w.text for w in groups[1]] == ["when", "everything", "went", "wrong"]
 
 
+def test_partition_tolerates_fewer_tts_words_than_tokens():
+    """Edge TTS sometimes emits fewer WordBoundary events than whitespace tokens."""
+    sentences = [
+        "Before I could unplug my computer, my monitor went black and my webcam light turned on.",
+        "I ran downstairs.",
+    ]
+    # First sentence has 16 whitespace tokens; provide only 15 + 2 for the second.
+    texts = [
+        "Before",
+        "I",
+        "could",
+        "unplug",
+        "my",
+        "computer",
+        "my",
+        "monitor",
+        "went",
+        "black",
+        "and",
+        "my",
+        "webcam",
+        "light",
+        "turned",
+        "I",
+        "ran",
+    ]
+    words = [
+        WordTiming(text=t, start_ms=i * 100, end_ms=i * 100 + 80)
+        for i, t in enumerate(texts)
+    ]
+    groups = partition_words_by_sentences(sentences, words)
+    assert len(groups) == 2
+    assert sum(len(g) for g in groups) == len(words)
+    assert len(groups[0]) >= 1
+    assert len(groups[1]) >= 1
+    assert [w.text for w in groups[0]] + [w.text for w in groups[1]] == texts
+
+
+def test_partition_tolerates_extra_tts_words():
+    sentences = ["Hello world", "again"]
+    words = [
+        WordTiming("Hello", 0, 50),
+        WordTiming("world", 50, 100),
+        WordTiming("again", 100, 150),
+        WordTiming("friend", 150, 200),
+    ]
+    groups = partition_words_by_sentences(sentences, words)
+    assert sum(len(g) for g in groups) == 4
+    assert [w.text for w in groups[0]] + [w.text for w in groups[1]] == [
+        "Hello",
+        "world",
+        "again",
+        "friend",
+    ]
+
+
 def test_sentence_words_do_not_appear_before_sentence_starts():
     words = _words()
     sentences = ["I was playing Roblox", "when everything went wrong"]

@@ -8,5 +8,6 @@ services:
       APP_SECRET: ${APP_SECRET:?set APP_SECRET}
       MEDIA_ROOT: /app/media
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      YOUTUBE_COOKIES: ${YOUTUBE_COOKIES:-/app/media/youtube_cookies.txt}
     volumes:
       - ./media:/app/media

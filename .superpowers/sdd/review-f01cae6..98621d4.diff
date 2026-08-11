@@ -1,0 +1,390 @@
+# Review package: f01cae6378ee4a4f971dbb03482c14d806a6231c..98621d4
+
+## Commits
+98621d4 feat(web): pass pitch and speed through jobs API
+
+## Files changed
+ src/roblox_viral/web/app.py  | 19 ++++++++++++++++-
+ src/roblox_viral/web/jobs.py | 32 +++++++++++++++++++++++-----
+ tests/web/test_api.py        | 50 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/web/test_jobs.py       | 41 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 136 insertions(+), 6 deletions(-)
+
+## Diff
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index 4a61567..d04252f 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -15,20 +15,26 @@ from fastapi import (
+     Request,
+     UploadFile,
+ )
+ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+ from fastapi.staticfiles import StaticFiles
+ from fastapi.templating import Jinja2Templates
+ from pydantic import BaseModel, ValidationError
+ from starlette.middleware.sessions import SessionMiddleware
+ from starlette.status import HTTP_303_SEE_OTHER, HTTP_409_CONFLICT
+ 
++from roblox_viral.voice import (
++    DEFAULT_PITCH,
++    DEFAULT_SPEED,
++    format_edge_pitch,
++    format_edge_rate,
++)
+ from roblox_viral.web.auth import require_login, set_authenticated
+ from roblox_viral.web.config import Settings, get_settings
+ from roblox_viral.web.gemini import generate_story
+ from roblox_viral.web.jobs import BusyError, JobManager
+ from roblox_viral.web import library as library_mod
+ from roblox_viral.web.library import delete_source, list_outputs, list_sources, save_upload
+ from roblox_viral.web.prompt import load_prompt, save_prompt
+ from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
+ 
+ WEB_DIR = Path(__file__).resolve().parent
+@@ -36,20 +42,22 @@ TEMPLATES_DIR = WEB_DIR / "templates"
+ STATIC_DIR = WEB_DIR / "static"
+ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+ 
+ _UPLOAD_CHUNK = 1024 * 1024  # 1 MiB
+ 
+ 
+ class CreateJobBody(BaseModel):
+     source_name: str = ""
+     story: str = ""
+     voice: str | None = None
++    pitch: int | None = None
++    speed: int | None = None
+ 
+ 
+ class YoutubeImportBody(BaseModel):
+     url: str = ""
+     name: str = ""
+ 
+ 
+ async def _read_upload_capped(
+     file: UploadFile, max_bytes: int | None = None
+ ) -> bytes:
+@@ -323,22 +331,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+         try:
+             raw = await request.body()
+             body = CreateJobBody.model_validate_json(raw)
+         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+             raise HTTPException(
+                 status_code=400, detail="Invalid JSON body"
+             ) from exc
+         source_name = body.source_name
+         story = body.story
+         voice = body.voice or DEFAULT_VOICE
++        pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
++        speed = DEFAULT_SPEED if body.speed is None else body.speed
+         try:
+-            record = mgr.create(settings, source_name, story, voice)
++            format_edge_pitch(pitch)
++            format_edge_rate(speed)
++        except ValueError as exc:
++            raise HTTPException(status_code=400, detail=str(exc)) from exc
++        try:
++            record = mgr.create(
++                settings, source_name, story, voice, pitch=pitch, speed=speed
++            )
+         except BusyError as exc:
+             raise HTTPException(
+                 status_code=HTTP_409_CONFLICT,
+                 detail=str(exc),
+             ) from exc
+         except (ValueError, FileNotFoundError) as exc:
+             raise HTTPException(status_code=400, detail=str(exc)) from exc
+         background_tasks.add_task(mgr.run_job, settings, record.id)
+         return {"id": record.id, "status": record.status}
+ 
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index b3571f9..0e6441b 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -4,21 +4,27 @@ import json
+ import re
+ import threading
+ import uuid
+ from dataclasses import asdict, dataclass
+ from datetime import datetime, timezone
+ from typing import Literal
+ 
+ from roblox_viral.captions import write_ass
+ from roblox_viral.render import render_video
+ from roblox_viral.story import join_for_tts, split_sentences
+-from roblox_viral.voice import EdgeTTSProvider
++from roblox_viral.voice import (
++    DEFAULT_PITCH,
++    DEFAULT_SPEED,
++    EdgeTTSProvider,
++    format_edge_pitch,
++    format_edge_rate,
++)
+ from roblox_viral.web.config import Settings
+ from roblox_viral.web.library import (
+     make_output_name,
+     resolve_source,
+     slice_into_minute_parts,
+ )
+ from roblox_viral.web.youtube import (
+     download_youtube,
+     validate_stem,
+     validate_youtube_url,
+@@ -46,55 +52,67 @@ class BusyError(Exception):
+ @dataclass
+ class JobRecord:
+     id: str
+     status: JobStatus
+     error: str | None
+     source_name: str
+     voice: str
+     output_name: str | None
+     created_at: str
+     kind: str = "render"  # "render" | "youtube"
++    pitch: int = DEFAULT_PITCH
++    speed: int = DEFAULT_SPEED
+     url: str | None = None
+     stem: str | None = None
+     created_slices: list[str] | None = None
+ 
+ 
+ class JobManager:
+     """In-memory job store with single-flight pipeline execution."""
+ 
+     def __init__(self) -> None:
+         self._lock = threading.Lock()
+         self._active_id: str | None = None
+         self._jobs: dict[str, JobRecord] = {}
+         self._stories: dict[str, str] = {}
+ 
+     def create(
+-        self, settings: Settings, source_name: str, story: str, voice: str
++        self,
++        settings: Settings,
++        source_name: str,
++        story: str,
++        voice: str,
++        pitch: int = DEFAULT_PITCH,
++        speed: int = DEFAULT_SPEED,
+     ) -> JobRecord:
++        format_edge_pitch(pitch)
++        format_edge_rate(speed)
+         resolve_source(settings, source_name)
+         sentences = split_sentences(story)
+         if not sentences:
+             raise ValueError("Story is empty")
+ 
+         with self._lock:
+             if self._active_id is not None:
+                 raise BusyError("A job is already in progress")
+             job_id = uuid.uuid4().hex
+             record = JobRecord(
+                 id=job_id,
+                 status="queued",
+                 error=None,
+                 source_name=source_name,
+                 voice=voice,
+                 output_name=None,
+                 created_at=datetime.now(timezone.utc).isoformat(),
+                 kind="render",
++                pitch=pitch,
++                speed=speed,
+             )
+             self._jobs[job_id] = record
+             self._stories[job_id] = story
+             self._active_id = job_id
+ 
+         try:
+             job_dir = settings.jobs_dir / job_id
+             job_dir.mkdir(parents=True, exist_ok=True)
+             self._persist(settings, record)
+         except Exception:
+@@ -159,20 +177,22 @@ class JobManager:
+             data = json.loads(status_path.read_text(encoding="utf-8"))
+             record = JobRecord(
+                 id=str(data["id"]),
+                 status=data["status"],
+                 error=data.get("error"),
+                 source_name=str(data.get("source_name") or ""),
+                 voice=str(data.get("voice") or ""),
+                 output_name=data.get("output_name"),
+                 created_at=str(data["created_at"]),
+                 kind=str(data.get("kind") or "render"),
++                pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
++                speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
+                 url=data.get("url"),
+                 stem=data.get("stem"),
+                 created_slices=data.get("created_slices"),
+             )
+         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+             return None
+ 
+         if record.id != job_id or not _SAFE_JOB_ID.fullmatch(record.id):
+             return None
+ 
+@@ -196,23 +216,25 @@ class JobManager:
+ 
+             video_path = resolve_source(settings, record.source_name)
+             job_dir = settings.jobs_dir / job_id
+             job_dir.mkdir(parents=True, exist_ok=True)
+             narration_path = job_dir / "narration.mp3"
+             ass_path = job_dir / "captions.ass"
+             output_name = make_output_name(record.source_name)
+             output_path = settings.outputs_dir / output_name
+ 
+             self._set_status(settings, record, "synthesizing")
+-            words = EdgeTTSProvider(record.voice).synthesize(
+-                join_for_tts(sentences), narration_path
+-            )
++            words = EdgeTTSProvider(
++                record.voice,
++                rate=format_edge_rate(record.speed),
++                pitch=format_edge_pitch(record.pitch),
++            ).synthesize(join_for_tts(sentences), narration_path)
+ 
+             self._set_status(settings, record, "captioning")
+             write_ass(words, ass_path, sentences=sentences)
+ 
+             self._set_status(settings, record, "rendering")
+             render_video(
+                 video_path=video_path,
+                 audio_path=narration_path,
+                 ass_path=ass_path,
+                 output_path=output_path,
+diff --git a/tests/web/test_api.py b/tests/web/test_api.py
+index a088fa8..872ce6e 100644
+--- a/tests/web/test_api.py
++++ b/tests/web/test_api.py
+@@ -217,20 +217,70 @@ def test_generate_page_lists_recent_outputs(tmp_path, monkeypatch):
+     (settings.outputs_dir / "newer.mp4").write_bytes(b"new")
+ 
+     r = c.get("/")
+     assert r.status_code == 200
+     assert "Recent outputs" in r.text
+     assert "older.mp4" in r.text
+     assert "newer.mp4" in r.text
+     assert "/media/outputs/newer.mp4" in r.text
+ 
+ 
++def test_create_job_accepts_pitch_and_speed(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    _seed_source(c)
++
++    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
++        record = self.get(job_id)
++        assert record is not None
++        record.output_name = f"{job_id}.mp4"
++        out = settings.outputs_dir / record.output_name
++        out.parent.mkdir(parents=True, exist_ok=True)
++        out.write_bytes(b"fake-mp4")
++        record.status = "done"
++        with self._lock:
++            if self._active_id == job_id:
++                self._active_id = None
++
++    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
++
++    r = c.post(
++        "/api/jobs",
++        json={
++            "source_name": "clip.mp4",
++            "story": "Hi.\n",
++            "voice": "en-US-EmmaNeural",
++            "pitch": 15,
++            "speed": 130,
++        },
++    )
++    assert r.status_code == 200
++
++
++def test_create_job_rejects_bad_pitch(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    _seed_source(c)
++
++    r = c.post(
++        "/api/jobs",
++        json={
++            "source_name": "clip.mp4",
++            "story": "Hi.\n",
++            "voice": "en-US-EmmaNeural",
++            "pitch": 99,
++            "speed": 130,
++        },
++    )
++    assert r.status_code == 400
++
++
+ def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
+     async def fake_voices():
+         return [
+             VoiceInfo("en-US-EmmaNeural", "en-US", "Female"),
+             VoiceInfo("en-GB-SoniaNeural", "en-GB", "Female"),
+         ]
+ 
+     monkeypatch.setattr(
+         "roblox_viral.web.app.list_english_voices", fake_voices
+     )
+diff --git a/tests/web/test_jobs.py b/tests/web/test_jobs.py
+index e2651f9..8639027 100644
+--- a/tests/web/test_jobs.py
++++ b/tests/web/test_jobs.py
+@@ -146,15 +146,56 @@ def test_get_hydrates_from_disk(tmp_path, monkeypatch):
+ 
+ 
+ def test_get_rejects_unsafe_job_id(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     mgr = JobManager()
+     assert mgr.get("../etc/passwd", s) is None
+     assert mgr.get("not-a-uuid", s) is None
+     assert mgr.get("", s) is None
+ 
+ 
++def test_run_job_passes_pitch_and_speed_to_tts(tmp_path, monkeypatch):
++    from pathlib import Path
++
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    constructed = {}
++
++    class FakeProvider:
++        def __init__(self, voice, *, rate="+0%", pitch="+0Hz"):
++            constructed["voice"] = voice
++            constructed["rate"] = rate
++            constructed["pitch"] = pitch
++
++        def synthesize(self, text, output_path):
++            Path(output_path).write_bytes(b"mp3")
++            return [WordTiming("One", 0, 100)]
++
++    def fake_write_ass(words, ass_path, sentences=None):
++        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
++
++    def fake_render_video(**kwargs):
++        Path(kwargs["output_path"]).write_bytes(b"mp4")
++
++    monkeypatch.setattr("roblox_viral.web.jobs.EdgeTTSProvider", FakeProvider)
++    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
++    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
++
++    job = mgr.create(
++        s,
++        "clip.mp4",
++        "One line only here.\n",
++        "en-US-EmmaNeural",
++        pitch=15,
++        speed=130,
++    )
++    mgr.run_job(s, job.id)
++    assert constructed["rate"] == "+30%"
++    assert constructed["pitch"] == "+15Hz"
++    assert mgr.get(job.id, s).status == "done"
++
++
+ def test_get_missing_status_returns_none(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     mgr = JobManager()
+     missing = "a" * 32
+     assert mgr.get(missing, s) is None

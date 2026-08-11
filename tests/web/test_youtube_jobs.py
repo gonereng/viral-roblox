@@ -29,7 +29,7 @@ def test_run_youtube_job_success(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     mgr = JobManager()
 
-    def fake_download(url: str, dest: Path) -> Path:
+    def fake_download(url: str, dest: Path, **kwargs) -> Path:
         dest.write_bytes(b"video")
         return dest
 

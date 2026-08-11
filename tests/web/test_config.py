@@ -53,7 +53,9 @@ def test_overlay_video_path_default_and_env(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
     monkeypatch.delenv("OVERLAY_VIDEO", raising=False)
     settings = Settings.from_env()
-    assert settings.overlay_video_path is None
+    # Packaged asset may exist in the checkout; media override is tested below.
+    packaged = settings.overlay_video_path
+    assert packaged is None or packaged.name == "overlay.mp4"
 
     overlay = media / "overlay.mp4"
     overlay.write_bytes(b"fake")
@@ -64,3 +66,15 @@ def test_overlay_video_path_default_and_env(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OVERLAY_VIDEO", str(other))
     settings2 = Settings.from_env()
     assert settings2.overlay_video_path == other
+
+
+def test_resolve_overlay_falls_back_to_packaged(tmp_path: Path, monkeypatch):
+    from roblox_viral.web.config import resolve_overlay_video_path
+
+    monkeypatch.delenv("OVERLAY_VIDEO", raising=False)
+    media = tmp_path / "empty-media"
+    media.mkdir()
+    path = resolve_overlay_video_path(media_root=media, overlay_video="")
+    assert path is not None
+    assert path.is_file()
+    assert path.name == "overlay.mp4"

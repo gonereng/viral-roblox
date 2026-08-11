@@ -27,7 +27,7 @@ roblox-viral-web = "roblox_viral.web.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-roblox_viral = ["web/templates/*.html", "web/static/*"]
+roblox_viral = ["web/templates/*.html", "web/static/*", "assets/*"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]

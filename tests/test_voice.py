@@ -18,9 +18,9 @@ def test_format_edge_pitch_defaults_and_signs():
 
 def test_format_edge_pitch_rejects_out_of_range():
     with pytest.raises(ValueError):
-        format_edge_pitch(-51)
+        format_edge_pitch(-101)
     with pytest.raises(ValueError):
-        format_edge_pitch(51)
+        format_edge_pitch(101)
 
 
 def test_format_edge_rate_defaults_and_signs():

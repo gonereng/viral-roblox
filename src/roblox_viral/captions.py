@@ -15,35 +15,66 @@ def expected_word_count(sentence: str) -> int:
     return len(sentence.split())
 
 
+def _allocate_counts(weights: list[int], total: int) -> list[int]:
+    """Distribute `total` items across buckets by relative weights (largest remainder)."""
+    if not weights:
+        return []
+    weight_sum = sum(weights)
+    if total <= 0:
+        return [0] * len(weights)
+    if weight_sum <= 0:
+        counts = [0] * len(weights)
+        counts[-1] = total
+        return counts
+
+    raw = [w * total / weight_sum for w in weights]
+    counts = [int(x) for x in raw]
+    remainders = sorted(
+        ((raw[i] - counts[i], i) for i in range(len(weights))),
+        key=lambda item: (-item[0], item[1]),
+    )
+    leftover = total - sum(counts)
+    for _, idx in remainders[:leftover]:
+        counts[idx] += 1
+    return counts
+
+
 def partition_words_by_sentences(
     sentences: list[str], words: list[WordTiming]
 ) -> list[list[WordTiming]]:
     """
     Assign flat TTS word timings to story sentences (one sentence per line).
 
-    Consumes words in order using each sentence's whitespace token count.
+    When Edge TTS WordBoundary counts match whitespace tokens, words are split
+    exactly. When they differ (common with punctuation / compounds), words are
+    distributed in order proportional to each sentence's token count so karaoke
+    still covers the full audio.
     """
-    groups: list[list[WordTiming]] = []
+    if not sentences:
+        return [words] if words else []
+
+    expected = [expected_word_count(s) for s in sentences]
+    total_expected = sum(expected)
+    n_words = len(words)
+
+    if n_words == 0:
+        return [[] for _ in sentences]
+
+    if total_expected == n_words:
+        groups: list[list[WordTiming]] = []
+        cursor = 0
+        for n in expected:
+            groups.append(words[cursor : cursor + n])
+            cursor += n
+        return groups
+
+    # Mismatch: keep word order, scale sentence sizes to the TTS word count.
+    counts = _allocate_counts(expected, n_words)
+    groups = []
     cursor = 0
-    for sentence in sentences:
-        n = expected_word_count(sentence)
-        if n == 0:
-            groups.append([])
-            continue
-        if cursor + n > len(words):
-            raise ValueError(
-                f"TTS word count mismatch: need {n} words for sentence "
-                f"{sentence!r}, but only {len(words) - cursor} remain "
-                f"({len(words)} total words for {len(sentences)} sentences)"
-            )
+    for n in counts:
         groups.append(words[cursor : cursor + n])
         cursor += n
-
-    if cursor < len(words):
-        if groups:
-            groups[-1] = groups[-1] + words[cursor:]
-        else:
-            groups.append(words[cursor:])
     return groups
 
 

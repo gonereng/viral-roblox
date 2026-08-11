@@ -23,7 +23,10 @@ def resolve_overlay_video_path(
         return path if path.is_file() else None
     root = media_root if media_root is not None else Path(os.environ.get("MEDIA_ROOT", "media"))
     default = Path(root) / "overlay.mp4"
-    return default if default.is_file() else None
+    if default.is_file():
+        return default
+    packaged = Path(__file__).resolve().parent.parent / "assets" / "overlay.mp4"
+    return packaged if packaged.is_file() else None
 
 
 @dataclass(frozen=True)

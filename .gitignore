@@ -7,6 +7,7 @@ build/
 output.mp4
 *.mp4
 !examples/**
+!src/roblox_viral/assets/overlay.mp4
 .pytest_cache/
 temp/
 roblox_viral_*/
@@ -15,3 +16,7 @@ media/**/*
 !media/**/.gitkeep
 
 .worktrees/
+
+.env
+youtube_cookies.txt
+media/youtube_cookies.txt

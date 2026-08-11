@@ -84,7 +84,7 @@ Optional env vars:
 | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
 | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
 | `YOUTUBE_COOKIES` | Optional path to a Netscape `cookies.txt` for YouTube imports (bot checks). If unset, `MEDIA_ROOT/youtube_cookies.txt` is used when present. |
-| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, `MEDIA_ROOT/overlay.mp4` is used when present. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
+| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
 
 ### Docker
 

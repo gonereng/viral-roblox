@@ -1,0 +1,141 @@
+# Review package: 98621d4988ede1a7c7beefbaba310e27af535a10..ebdb013
+
+## Commits
+ebdb013 feat(web): pitch and speed sliders on Generate
+
+## Files changed
+ src/roblox_viral/web/static/app.css          |  9 +++++++++
+ src/roblox_viral/web/static/app.js           | 24 ++++++++++++++++++++++++
+ src/roblox_viral/web/templates/generate.html | 10 ++++++++++
+ 3 files changed, 43 insertions(+)
+
+## Diff
+diff --git a/src/roblox_viral/web/static/app.css b/src/roblox_viral/web/static/app.css
+index 873b2db..0c51788 100644
+--- a/src/roblox_viral/web/static/app.css
++++ b/src/roblox_viral/web/static/app.css
+@@ -182,10 +182,19 @@ button:disabled {
+   color: var(--error);
+   border: 1px solid var(--line);
+ }
+ 
+ #player {
+   width: 100%;
+   max-height: 70vh;
+   background: #111;
+   border-radius: 0.4rem;
+ }
++
++.slider-field input[type="range"] {
++  width: 100%;
++  display: block;
++  margin-top: 0.35rem;
++}
++.slider-field span {
++  font-variant-numeric: tabular-nums;
++}
+diff --git a/src/roblox_viral/web/static/app.js b/src/roblox_viral/web/static/app.js
+index 1bdb0c6..d126ee1 100644
+--- a/src/roblox_viral/web/static/app.js
++++ b/src/roblox_viral/web/static/app.js
+@@ -32,20 +32,42 @@
+         }
+       } finally {
+         storyBtn.disabled = false;
+       }
+     });
+   }
+ 
+   const form = document.getElementById("generate-form");
+   if (!form) return;
+ 
++  const pitchInput = document.getElementById("pitch");
++  const speedInput = document.getElementById("speed");
++  const pitchValue = document.getElementById("pitch-value");
++  const speedValue = document.getElementById("speed-value");
++
++  function formatPitchLabel(n) {
++    const v = Number(n);
++    return (v > 0 ? "+" : "") + v + "%";
++  }
++  function formatSpeedLabel(n) {
++    return Number(n) + "%";
++  }
++  function syncVoiceSliders() {
++    if (pitchValue) pitchValue.textContent = formatPitchLabel(pitchInput.value);
++    if (speedValue) speedValue.textContent = formatSpeedLabel(speedInput.value);
++  }
++  if (pitchInput && speedInput) {
++    pitchInput.addEventListener("input", syncVoiceSliders);
++    speedInput.addEventListener("input", syncVoiceSliders);
++    syncVoiceSliders();
++  }
++
+   const statusEl = document.getElementById("status");
+   const errorEl = document.getElementById("error");
+   const resultEl = document.getElementById("result");
+   const player = document.getElementById("player");
+   const download = document.getElementById("download");
+   const generateBtn = document.getElementById("generate-btn");
+ 
+   let pollTimer = null;
+ 
+   function setStatus(text) {
+@@ -136,20 +158,22 @@
+     event.preventDefault();
+     clearError();
+     resultEl.hidden = true;
+     player.removeAttribute("src");
+     stopPolling();
+ 
+     const payload = {
+       source_name: document.getElementById("source_name").value,
+       story: document.getElementById("story").value,
+       voice: document.getElementById("voice").value,
++      pitch: Number(document.getElementById("pitch").value),
++      speed: Number(document.getElementById("speed").value),
+     };
+ 
+     generateBtn.disabled = true;
+     setStatus("starting");
+ 
+     try {
+       const res = await fetch("/api/jobs", {
+         method: "POST",
+         headers: {
+           "Content-Type": "application/json",
+diff --git a/src/roblox_viral/web/templates/generate.html b/src/roblox_viral/web/templates/generate.html
+index 126245f..f2f47f7 100644
+--- a/src/roblox_viral/web/templates/generate.html
++++ b/src/roblox_viral/web/templates/generate.html
+@@ -31,20 +31,30 @@
+       Voice
+       <select id="voice" name="voice" required>
+         {% for v in voices %}
+         <option value="{{ v.short_name }}"{% if v.short_name == default_voice %} selected{% endif %}>
+           {{ v.short_name }} ({{ v.gender }})
+         </option>
+         {% endfor %}
+       </select>
+     </label>
+ 
++    <label class="slider-field">
++      Pitch <span id="pitch-value">+15%</span>
++      <input id="pitch" name="pitch" type="range" min="-50" max="50" step="1" value="15" />
++    </label>
++
++    <label class="slider-field">
++      Speed <span id="speed-value">130%</span>
++      <input id="speed" name="speed" type="range" min="50" max="200" step="1" value="130" />
++    </label>
++
+     <button id="generate-btn" type="submit"{% if not sources %} disabled{% endif %}>Generate</button>
+   </form>
+ 
+   <section class="progress" aria-live="polite">
+     <p>Status: <span id="status">idle</span></p>
+     <p id="error" class="error" hidden></p>
+   </section>
+ 
+   <section class="result" id="result" hidden>
+     <video id="player" controls playsinline></video>
