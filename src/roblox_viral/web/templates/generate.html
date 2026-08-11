@@ -38,6 +38,16 @@
       </select>
     </label>
 
+    <label class="slider-field">
+      Pitch <span id="pitch-value">+15%</span>
+      <input id="pitch" name="pitch" type="range" min="-50" max="50" step="1" value="15" />
+    </label>
+
+    <label class="slider-field">
+      Speed <span id="speed-value">130%</span>
+      <input id="speed" name="speed" type="range" min="50" max="200" step="1" value="130" />
+    </label>
+
     <button id="generate-btn" type="submit"{% if not sources %} disabled{% endif %}>Generate</button>
   </form>
 

@@ -39,6 +39,28 @@
   const form = document.getElementById("generate-form");
   if (!form) return;
 
+  const pitchInput = document.getElementById("pitch");
+  const speedInput = document.getElementById("speed");
+  const pitchValue = document.getElementById("pitch-value");
+  const speedValue = document.getElementById("speed-value");
+
+  function formatPitchLabel(n) {
+    const v = Number(n);
+    return (v > 0 ? "+" : "") + v + "%";
+  }
+  function formatSpeedLabel(n) {
+    return Number(n) + "%";
+  }
+  function syncVoiceSliders() {
+    if (pitchValue) pitchValue.textContent = formatPitchLabel(pitchInput.value);
+    if (speedValue) speedValue.textContent = formatSpeedLabel(speedInput.value);
+  }
+  if (pitchInput && speedInput) {
+    pitchInput.addEventListener("input", syncVoiceSliders);
+    speedInput.addEventListener("input", syncVoiceSliders);
+    syncVoiceSliders();
+  }
+
   const statusEl = document.getElementById("status");
   const errorEl = document.getElementById("error");
   const resultEl = document.getElementById("result");
@@ -143,6 +165,8 @@
       source_name: document.getElementById("source_name").value,
       story: document.getElementById("story").value,
       voice: document.getElementById("voice").value,
+      pitch: Number(document.getElementById("pitch").value),
+      speed: Number(document.getElementById("speed").value),
     };
 
     generateBtn.disabled = true;

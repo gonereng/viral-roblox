@@ -189,3 +189,12 @@ button:disabled {
   background: #111;
   border-radius: 0.4rem;
 }
+
+.slider-field input[type="range"] {
+  width: 100%;
+  display: block;
+  margin-top: 0.35rem;
+}
+.slider-field span {
+  font-variant-numeric: tabular-nums;
+}
