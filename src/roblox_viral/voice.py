@@ -23,6 +23,35 @@ class VoiceProvider(Protocol):
         ...
 
 
+DEFAULT_PITCH = 15
+DEFAULT_SPEED = 130
+PITCH_MIN, PITCH_MAX = -50, 50
+SPEED_MIN, SPEED_MAX = 50, 200
+
+
+def format_edge_pitch(pitch: int) -> str:
+    if not isinstance(pitch, int) or isinstance(pitch, bool):
+        raise ValueError("pitch must be an int")
+    if pitch < PITCH_MIN or pitch > PITCH_MAX:
+        raise ValueError(f"pitch must be between {PITCH_MIN} and {PITCH_MAX}")
+    if pitch >= 0:
+        return f"+{pitch}Hz"
+    return f"{pitch}Hz"
+
+
+def format_edge_rate(speed_percent: int) -> str:
+    if not isinstance(speed_percent, int) or isinstance(speed_percent, bool):
+        raise ValueError("speed must be an int")
+    if speed_percent < SPEED_MIN or speed_percent > SPEED_MAX:
+        raise ValueError(
+            f"speed must be between {SPEED_MIN} and {SPEED_MAX}"
+        )
+    delta = speed_percent - 100
+    if delta >= 0:
+        return f"+{delta}%"
+    return f"{delta}%"
+
+
 # Edge TTS boundary offset/duration are in 100-nanosecond units.
 _TICKS_PER_MS = 10_000
 
@@ -30,8 +59,16 @@ _TICKS_PER_MS = 10_000
 class EdgeTTSProvider:
     """Microsoft Edge TTS via edge-tts, with word-boundary events."""
 
-    def __init__(self, voice: str = "en-US-EmmaNeural") -> None:
+    def __init__(
+        self,
+        voice: str = "en-US-EmmaNeural",
+        *,
+        rate: str = "+0%",
+        pitch: str = "+0Hz",
+    ) -> None:
         self.voice = voice
+        self.rate = rate
+        self.pitch = pitch
 
     def synthesize(self, text: str, output_path: Path | str) -> list[WordTiming]:
         return asyncio.run(self._synthesize_async(text, Path(output_path)))
@@ -41,7 +78,11 @@ class EdgeTTSProvider:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         communicate = edge_tts.Communicate(
-            text, self.voice, boundary="WordBoundary"
+            text,
+            self.voice,
+            rate=self.rate,
+            pitch=self.pitch,
+            boundary="WordBoundary",
         )
         words: list[WordTiming] = []
         audio_chunks: list[bytes] = []
