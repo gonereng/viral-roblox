@@ -56,6 +56,8 @@
 Create `tests/test_voice.py`:
 
 ```python
+import pytest
+
 from roblox_viral.voice import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
