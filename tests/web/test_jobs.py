@@ -153,6 +153,47 @@ def test_get_rejects_unsafe_job_id(tmp_path, monkeypatch):
     assert mgr.get("", s) is None
 
 
+def test_run_job_passes_pitch_and_speed_to_tts(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    constructed = {}
+
+    class FakeProvider:
+        def __init__(self, voice, *, rate="+0%", pitch="+0Hz"):
+            constructed["voice"] = voice
+            constructed["rate"] = rate
+            constructed["pitch"] = pitch
+
+        def synthesize(self, text, output_path):
+            Path(output_path).write_bytes(b"mp3")
+            return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr("roblox_viral.web.jobs.EdgeTTSProvider", FakeProvider)
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(
+        s,
+        "clip.mp4",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        pitch=15,
+        speed=130,
+    )
+    mgr.run_job(s, job.id)
+    assert constructed["rate"] == "+30%"
+    assert constructed["pitch"] == "+15Hz"
+    assert mgr.get(job.id, s).status == "done"
+
+
 def test_get_missing_status_returns_none(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     mgr = JobManager()

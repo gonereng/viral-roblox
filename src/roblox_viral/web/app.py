@@ -22,6 +22,12 @@ from pydantic import BaseModel, ValidationError
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_303_SEE_OTHER, HTTP_409_CONFLICT
 
+from roblox_viral.voice import (
+    DEFAULT_PITCH,
+    DEFAULT_SPEED,
+    format_edge_pitch,
+    format_edge_rate,
+)
 from roblox_viral.web.auth import require_login, set_authenticated
 from roblox_viral.web.config import Settings, get_settings
 from roblox_viral.web.gemini import generate_story
@@ -43,6 +49,8 @@ class CreateJobBody(BaseModel):
     source_name: str = ""
     story: str = ""
     voice: str | None = None
+    pitch: int | None = None
+    speed: int | None = None
 
 
 class YoutubeImportBody(BaseModel):
@@ -330,8 +338,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         source_name = body.source_name
         story = body.story
         voice = body.voice or DEFAULT_VOICE
+        pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
+        speed = DEFAULT_SPEED if body.speed is None else body.speed
         try:
-            record = mgr.create(settings, source_name, story, voice)
+            format_edge_pitch(pitch)
+            format_edge_rate(speed)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            record = mgr.create(
+                settings, source_name, story, voice, pitch=pitch, speed=speed
+            )
         except BusyError as exc:
             raise HTTPException(
                 status_code=HTTP_409_CONFLICT,

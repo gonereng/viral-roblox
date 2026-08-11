@@ -11,7 +11,13 @@ from typing import Literal
 from roblox_viral.captions import write_ass
 from roblox_viral.render import render_video
 from roblox_viral.story import join_for_tts, split_sentences
-from roblox_viral.voice import EdgeTTSProvider
+from roblox_viral.voice import (
+    DEFAULT_PITCH,
+    DEFAULT_SPEED,
+    EdgeTTSProvider,
+    format_edge_pitch,
+    format_edge_rate,
+)
 from roblox_viral.web.config import Settings
 from roblox_viral.web.library import (
     make_output_name,
@@ -53,6 +59,8 @@ class JobRecord:
     output_name: str | None
     created_at: str
     kind: str = "render"  # "render" | "youtube"
+    pitch: int = DEFAULT_PITCH
+    speed: int = DEFAULT_SPEED
     url: str | None = None
     stem: str | None = None
     created_slices: list[str] | None = None
@@ -68,8 +76,16 @@ class JobManager:
         self._stories: dict[str, str] = {}
 
     def create(
-        self, settings: Settings, source_name: str, story: str, voice: str
+        self,
+        settings: Settings,
+        source_name: str,
+        story: str,
+        voice: str,
+        pitch: int = DEFAULT_PITCH,
+        speed: int = DEFAULT_SPEED,
     ) -> JobRecord:
+        format_edge_pitch(pitch)
+        format_edge_rate(speed)
         resolve_source(settings, source_name)
         sentences = split_sentences(story)
         if not sentences:
@@ -88,6 +104,8 @@ class JobManager:
                 output_name=None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind="render",
+                pitch=pitch,
+                speed=speed,
             )
             self._jobs[job_id] = record
             self._stories[job_id] = story
@@ -166,6 +184,8 @@ class JobManager:
                 output_name=data.get("output_name"),
                 created_at=str(data["created_at"]),
                 kind=str(data.get("kind") or "render"),
+                pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
+                speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
                 url=data.get("url"),
                 stem=data.get("stem"),
                 created_slices=data.get("created_slices"),
@@ -203,9 +223,11 @@ class JobManager:
             output_path = settings.outputs_dir / output_name
 
             self._set_status(settings, record, "synthesizing")
-            words = EdgeTTSProvider(record.voice).synthesize(
-                join_for_tts(sentences), narration_path
-            )
+            words = EdgeTTSProvider(
+                record.voice,
+                rate=format_edge_rate(record.speed),
+                pitch=format_edge_pitch(record.pitch),
+            ).synthesize(join_for_tts(sentences), narration_path)
 
             self._set_status(settings, record, "captioning")
             write_ass(words, ass_path, sentences=sentences)

@@ -224,6 +224,56 @@ def test_generate_page_lists_recent_outputs(tmp_path, monkeypatch):
     assert "/media/outputs/newer.mp4" in r.text
 
 
+def test_create_job_accepts_pitch_and_speed(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    _seed_source(c)
+
+    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
+        record = self.get(job_id)
+        assert record is not None
+        record.output_name = f"{job_id}.mp4"
+        out = settings.outputs_dir / record.output_name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"fake-mp4")
+        record.status = "done"
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
+
+    r = c.post(
+        "/api/jobs",
+        json={
+            "source_name": "clip.mp4",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+            "pitch": 15,
+            "speed": 130,
+        },
+    )
+    assert r.status_code == 200
+
+
+def test_create_job_rejects_bad_pitch(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    _seed_source(c)
+
+    r = c.post(
+        "/api/jobs",
+        json={
+            "source_name": "clip.mp4",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+            "pitch": 99,
+            "speed": 130,
+        },
+    )
+    assert r.status_code == 400
+
+
 def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
     async def fake_voices():
         return [
