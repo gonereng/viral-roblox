@@ -38,6 +38,7 @@ class Settings:
     gemini_api_key: str = ""
     youtube_cookies: str = ""
     overlay_video: str = ""
+    api_key: str = ""
 
     @property
     def sources_dir(self) -> Path:
@@ -91,6 +92,7 @@ class Settings:
         gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
         youtube_cookies = os.environ.get("YOUTUBE_COOKIES", "")
         overlay_video = os.environ.get("OVERLAY_VIDEO", "")
+        api_key = os.environ.get("API_KEY", "")
         return cls(
             media_root=media,
             app_password=password,
@@ -99,6 +101,7 @@ class Settings:
             gemini_api_key=gemini_api_key,
             youtube_cookies=youtube_cookies,
             overlay_video=overlay_video,
+            api_key=api_key,
         )
 
 

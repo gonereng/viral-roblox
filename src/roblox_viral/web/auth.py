@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import secrets
+
 from fastapi import HTTPException, Request
-from starlette.status import HTTP_303_SEE_OTHER, HTTP_401_UNAUTHORIZED
+from starlette.status import HTTP_303_SEE_OTHER, HTTP_401_UNAUTHORIZED, HTTP_503_SERVICE_UNAVAILABLE
 
 
 SESSION_AUTH_KEY = "authenticated"
@@ -35,3 +37,23 @@ async def require_login(request: Request) -> None:
         detail="Redirect to login",
         headers={"Location": "/login"},
     )
+
+
+async def require_api_key(request: Request) -> None:
+    settings = request.app.state.settings
+    expected = (settings.api_key or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API key not configured",
+        )
+    provided = request.headers.get("X-API-Key") or ""
+    try:
+        ok = secrets.compare_digest(provided, expected)
+    except ValueError:
+        ok = False
+    if not ok:
+        raise HTTPException(
+            status_code=HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+        )
