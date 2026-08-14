@@ -1,0 +1,323 @@
+# Review package: 4edd0284190bb26a06f8a25c9f35d19c2736ce35..7d017a7
+
+## Commits
+7d017a7 feat(web): ephemeral job-local media for renders
+
+## Files changed
+ src/roblox_viral/web/jobs.py    | 37 ++++++++++++++++++++++++----
+ src/roblox_viral/web/library.py |  8 ++++++
+ tests/web/test_jobs.py          | 54 +++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 94 insertions(+), 5 deletions(-)
+
+## Diff
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index ba9b952..f617e46 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -1,36 +1,40 @@
+ from __future__ import annotations
+ 
+ import json
+ import re
+ import threading
+ import uuid
+ from dataclasses import asdict, dataclass
+ from datetime import datetime, timezone
+ from typing import Literal
+ 
++from pathlib import Path
++
+ from roblox_viral.captions import write_ass
+ from roblox_viral.render import render_still, render_video
+ from roblox_viral.story import join_for_tts, split_sentences
+ from roblox_viral.voice import (
+     DEFAULT_PITCH,
+     DEFAULT_SPEED,
+     EdgeTTSProvider,
+     format_edge_pitch,
+     format_edge_rate,
+ )
+ from roblox_viral.web.config import Settings
+ from roblox_viral.web.library import (
+     make_output_name,
+     resolve_image,
+     resolve_source,
+     slice_into_minute_parts,
++    validate_image_filename,
++    validate_video_filename,
+ )
+ from roblox_viral.web.youtube import (
+     download_youtube,
+     validate_stem,
+     validate_youtube_url,
+ )
+ 
+ JobStatus = Literal[
+     "queued",
+     "synthesizing",
+@@ -60,20 +64,21 @@ class JobRecord:
+     output_name: str | None
+     created_at: str
+     kind: str = "render"  # "render" | "youtube"
+     pitch: int = DEFAULT_PITCH
+     speed: int = DEFAULT_SPEED
+     mode: str = "roblox"  # "roblox" | "picture"
+     ken_burns: bool = False
+     url: str | None = None
+     stem: str | None = None
+     created_slices: list[str] | None = None
++    ephemeral: bool = False
+ 
+ 
+ class JobManager:
+     """In-memory job store with single-flight pipeline execution."""
+ 
+     def __init__(self) -> None:
+         self._lock = threading.Lock()
+         self._active_id: str | None = None
+         self._jobs: dict[str, JobRecord] = {}
+         self._stories: dict[str, str] = {}
+@@ -81,26 +86,36 @@ class JobManager:
+     def create(
+         self,
+         settings: Settings,
+         source_name: str,
+         story: str,
+         voice: str,
+         pitch: int = DEFAULT_PITCH,
+         speed: int = DEFAULT_SPEED,
+         mode: str = "roblox",
+         ken_burns: bool = False,
++        ephemeral: bool = False,
+     ) -> JobRecord:
+         format_edge_pitch(pitch)
+         format_edge_rate(speed)
+         if mode not in ("roblox", "picture"):
+             raise ValueError(f"Invalid mode: {mode!r}")
+-        if mode == "picture":
++        if ephemeral:
++            safe = Path(source_name).name
++            if safe != source_name or not safe:
++                raise ValueError("Invalid source_name")
++            if mode == "picture":
++                source_name = validate_image_filename(safe)
++            else:
++                source_name = validate_video_filename(safe)
++                ken_burns = False
++        elif mode == "picture":
+             resolve_image(settings, source_name)
+         else:
+             resolve_source(settings, source_name)
+             ken_burns = False
+         sentences = split_sentences(story)
+         if not sentences:
+             raise ValueError("Story is empty")
+ 
+         with self._lock:
+             if self._active_id is not None:
+@@ -112,20 +127,21 @@ class JobManager:
+                 error=None,
+                 source_name=source_name,
+                 voice=voice,
+                 output_name=None,
+                 created_at=datetime.now(timezone.utc).isoformat(),
+                 kind="render",
+                 pitch=pitch,
+                 speed=speed,
+                 mode=mode,
+                 ken_burns=ken_burns,
++                ephemeral=ephemeral,
+             )
+             self._jobs[job_id] = record
+             self._stories[job_id] = story
+             self._active_id = job_id
+ 
+         try:
+             job_dir = settings.jobs_dir / job_id
+             job_dir.mkdir(parents=True, exist_ok=True)
+             self._persist(settings, record)
+         except Exception:
+@@ -197,20 +213,21 @@ class JobManager:
+                 output_name=data.get("output_name"),
+                 created_at=str(data["created_at"]),
+                 kind=str(data.get("kind") or "render"),
+                 pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
+                 speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
+                 mode=str(data.get("mode") or "roblox"),
+                 ken_burns=bool(data.get("ken_burns", False)),
+                 url=data.get("url"),
+                 stem=data.get("stem"),
+                 created_slices=data.get("created_slices"),
++                ephemeral=bool(data.get("ephemeral", False)),
+             )
+         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+             return None
+ 
+         if record.id != job_id or not _SAFE_JOB_ID.fullmatch(record.id):
+             return None
+ 
+         with self._lock:
+             existing = self._jobs.get(job_id)
+             if existing is not None:
+@@ -240,34 +257,44 @@ class JobManager:
+             words = EdgeTTSProvider(
+                 record.voice,
+                 rate=format_edge_rate(record.speed),
+                 pitch=format_edge_pitch(record.pitch),
+             ).synthesize(join_for_tts(sentences), narration_path)
+ 
+             self._set_status(settings, record, "captioning")
+             write_ass(words, ass_path, sentences=sentences)
+ 
+             self._set_status(settings, record, "rendering")
++            if record.ephemeral:
++                media_path = (job_dir / record.source_name).resolve()
++                if (
++                    not media_path.is_relative_to(job_dir.resolve())
++                    or not media_path.is_file()
++                ):
++                    raise FileNotFoundError(record.source_name)
++            elif record.mode == "picture":
++                media_path = resolve_image(settings, record.source_name)
++            else:
++                media_path = resolve_source(settings, record.source_name)
++
+             if record.mode == "picture":
+-                image_path = resolve_image(settings, record.source_name)
+                 render_still(
+-                    image_path=image_path,
++                    image_path=media_path,
+                     audio_path=narration_path,
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     ken_burns=record.ken_burns,
+                     work_dir=job_dir,
+                 )
+             else:
+-                video_path = resolve_source(settings, record.source_name)
+                 render_video(
+-                    video_path=video_path,
++                    video_path=media_path,
+                     audio_path=narration_path,
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     work_dir=job_dir,
+                     overlay_path=settings.overlay_video_path,
+                 )
+ 
+             record.output_name = output_name
+             self._set_status(settings, record, "done")
+         except Exception as exc:
+diff --git a/src/roblox_viral/web/library.py b/src/roblox_viral/web/library.py
+index 0d299ef..d2e089f 100644
+--- a/src/roblox_viral/web/library.py
++++ b/src/roblox_viral/web/library.py
+@@ -45,20 +45,28 @@ def _safe_name(name: str) -> str:
+     return base
+ 
+ 
+ def _safe_image_name(name: str) -> str:
+     base = Path(name).name
+     if base != name or not _SAFE_IMAGE_NAME.match(base):
+         raise ValueError(f"Invalid image filename: {name!r}")
+     return base
+ 
+ 
++def validate_video_filename(name: str) -> str:
++    return _safe_name(name)
++
++
++def validate_image_filename(name: str) -> str:
++    return _safe_image_name(name)
++
++
+ def _commit_image_upload(images_dir: Path, safe: str, data: bytes) -> Path:
+     """Exclusively create an image; suffix on name collision."""
+     stem = Path(safe).stem
+     suffix = Path(safe).suffix.lower()
+     dest = images_dir / safe
+     while True:
+         try:
+             with open(dest, "xb") as fh:
+                 fh.write(data)
+         except FileExistsError:
+diff --git a/tests/web/test_jobs.py b/tests/web/test_jobs.py
+index 8b0e46b..b3057e1 100644
+--- a/tests/web/test_jobs.py
++++ b/tests/web/test_jobs.py
+@@ -1,10 +1,12 @@
++from pathlib import Path
++
+ import pytest
+ from roblox_viral.voice import WordTiming
+ from roblox_viral.web.config import Settings
+ from roblox_viral.web.jobs import BusyError, JobManager
+ 
+ 
+ def _settings(tmp_path, monkeypatch):
+     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+     monkeypatch.setenv("APP_PASSWORD", "x")
+     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+@@ -300,10 +302,62 @@ def test_run_picture_job_calls_render_still(tmp_path, monkeypatch):
+         ken_burns=True,
+     )
+     mgr.run_job(s, job.id)
+     done = mgr.get(job.id, s)
+     assert done.status == "done"
+     assert done.output_name.endswith(".mp4")
+     assert "still" in done.output_name
+     assert seen["ken_burns"] is True
+     assert "overlay_path" not in seen
+     assert Path(seen["image_path"]).name == "still.jpg"
++
++
++def test_create_ephemeral_skips_library(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    job = mgr.create(
++        s,
++        "input.mp4",
++        "One line only here.\n",
++        "en-US-EmmaNeural",
++        mode="roblox",
++        ephemeral=True,
++    )
++    assert job.ephemeral is True
++    assert job.source_name == "input.mp4"
++
++
++def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    seen = {}
++
++    def fake_synthesize(self, text, output_path):
++        Path(output_path).write_bytes(b"mp3")
++        return [WordTiming("One", 0, 100)]
++
++    def fake_write_ass(words, ass_path, sentences=None):
++        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
++
++    def fake_render_video(**kwargs):
++        seen["video_path"] = Path(kwargs["video_path"])
++        Path(kwargs["output_path"]).write_bytes(b"mp4")
++
++    monkeypatch.setattr(
++        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
++    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
++
++    job = mgr.create(
++        s,
++        "input.mp4",
++        "One line only here.\n",
++        "en-US-EmmaNeural",
++        mode="roblox",
++        ephemeral=True,
++    )
++    input_path = s.jobs_dir / job.id / "input.mp4"
++    input_path.write_bytes(b"vid")
++    mgr.run_job(s, job.id)
++    assert mgr.get(job.id, s).status == "done"
++    assert seen["video_path"] == input_path.resolve()

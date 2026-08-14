@@ -100,28 +100,43 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 
 Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`.
 
-PowerShell (upload):
+PowerShell / Windows (upload via `curl.exe` — works on PowerShell 5.1):
 
 ```powershell
-$headers = @{ "X-API-Key" = "your-key" }
-$form = @{
-  voice = "en-US-EmmaNeural"
-  story = "Hello.`nWorld."
-  type  = "roblox"
-  media = Get-Item "C:\path\to\clip.mp4"
-}
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/api/v1/videos" -Headers $headers -Form $form
+$apiKey = "your-key"
+$base = "http://127.0.0.1:8000"
+$video = "C:\path\to\clip.mp4"
+
+$create = curl.exe -s -X POST "$base/api/v1/videos" `
+  -H "X-API-Key: $apiKey" `
+  -F "voice=en-US-EmmaNeural" `
+  -F "story=Hello from n8n.`nThis is a test." `
+  -F "type=roblox" `
+  -F "media=@$video"
+$create
+$id = ($create | ConvertFrom-Json).id
+
+do {
+  Start-Sleep -Seconds 2
+  $status = curl.exe -s "$base/api/v1/videos/$id" -H "X-API-Key: $apiKey" | ConvertFrom-Json
+  Write-Host "status=$($status.status)"
+} while ($status.status -notin @("done", "error"))
+
+if ($status.status -eq "error") { throw $status.error }
+
+curl.exe -s -L "$base/api/v1/videos/$id/download" -H "X-API-Key: $apiKey" -o ".\out-$id.mp4"
+Write-Host "saved out-$id.mp4"
 ```
 
-PowerShell (Library name):
+Library name instead of upload (no `media` file):
 
 ```powershell
-$form = @{
-  voice = "en-US-EmmaNeural"
-  story = "Hello.`nWorld."
-  type  = "roblox"
-  source_name = "gameplay-1.mp4"
-}
+curl.exe -s -X POST "http://127.0.0.1:8000/api/v1/videos" `
+  -H "X-API-Key: your-key" `
+  -F "voice=en-US-EmmaNeural" `
+  -F "story=Hello.`nWorld." `
+  -F "type=roblox" `
+  -F "source_name=gameplay-1.mp4"
 ```
 
 ### Docker

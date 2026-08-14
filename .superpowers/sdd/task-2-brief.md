@@ -1,250 +1,254 @@
-### Task 2: `render_still`
+### Task 2: Multipart create endpoint
 
 **Files:**
-- Modify: `src/roblox_viral/render.py`
-- Modify: `tests/test_render.py`
+- Modify: `src/roblox_viral/web/api_v1.py`
+- Modify: `tests/web/test_api_v1.py`
 
 **Interfaces:**
-- Consumes: `OUTPUT_WIDTH`, `OUTPUT_HEIGHT`, `probe_duration_seconds`, `_ass_filter_path`, `require_ffmpeg`
-- Produces:
-  - `KEN_BURNS_ZOOM = 1.20`
-  - `KEN_BURNS_FPS = 30`
-  - `render_still(*, image_path, audio_path, ass_path, output_path, ken_burns: bool = False, work_dir=None) -> Path`
-  - No overlay argument
-  - Static vf: `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,ass='...'`
-  - Ken Burns: cover-scale to `1296x2304` (`1080*1.20` × `1920*1.20`), `zoompan` 1.0→1.20 over `max(1, round(duration * 30))` frames, `s=1080x1920`, then `ass`
+- Consumes: `JobManager.create(..., ephemeral=)`, upload byte helpers / limits from library
+- Produces: multipart `POST /videos` with Form + File
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Rewrite/extend tests**
 
-Append to `tests/test_render.py`:
+Change existing create tests from `json=` to `data=` form fields:
 
 ```python
-from roblox_viral.render import render_still
-
-
-def test_render_still_static_loops_image_no_overlay(tmp_path, monkeypatch):
-    image = _touch(tmp_path / "still.jpg")
-    audio = _touch(tmp_path / "n.mp3")
-    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
-    out = tmp_path / "out.mp4"
-    seen = {}
-
-    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.5)
-    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
-
-    def fake_run(cmd, check=False, capture_output=True, text=True):
-        seen["cmd"] = cmd
-        out.write_bytes(b"mp4")
-
-        class R:
-            returncode = 0
-            stderr = ""
-
-        return R()
-
-    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
-
-    render_still(
-        image_path=image,
-        audio_path=audio,
-        ass_path=ass,
-        output_path=out,
-        ken_burns=False,
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hello world.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+        },
     )
-    cmd = seen["cmd"]
-    assert cmd.count("-i") == 2
-    assert "-loop" in cmd
-    assert cmd[cmd.index("-loop") + 1] == "1"
-    assert "-framerate" in cmd
-    assert str(image) in cmd
-    assert str(audio) in cmd
-    assert "-vf" in cmd
-    vf = cmd[cmd.index("-vf") + 1]
-    assert "scale=1080:1920:force_original_aspect_ratio=increase" in vf
-    assert "crop=1080:1920" in vf
-    assert "zoompan" not in vf
-    assert "-filter_complex" not in cmd
-    assert "chromakey" not in " ".join(cmd)
-    assert "0:v:0" in cmd
-    assert "1:a:0" in cmd
-    assert "-t" in cmd
+```
 
+Add:
 
-def test_render_still_ken_burns_uses_zoompan(tmp_path, monkeypatch):
-    image = _touch(tmp_path / "still.png")
-    audio = _touch(tmp_path / "n.mp3")
-    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
-    out = tmp_path / "out.mp4"
-    seen = {}
+```python
+def test_create_with_media_upload_roblox(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
 
-    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
-    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        assert rec.ephemeral is True
+        inp = settings.jobs_dir / job_id / rec.source_name
+        assert inp.is_file()
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
 
-    def fake_run(cmd, check=False, capture_output=True, text=True):
-        seen["cmd"] = cmd
-        out.write_bytes(b"mp4")
-
-        class R:
-            returncode = 0
-            stderr = ""
-
-        return R()
-
-    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
-
-    render_still(
-        image_path=image,
-        audio_path=audio,
-        ass_path=ass,
-        output_path=out,
-        ken_burns=True,
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+        },
+        files={"media": ("clip.mp4", b"fake-video", "video/mp4")},
     )
-    cmd = seen["cmd"]
-    vf = cmd[cmd.index("-vf") + 1]
-    assert "zoompan" in vf
-    assert "1.20" in vf or "1.2" in vf
-    assert "s=1080x1920" in vf
-    assert "fps=30" in vf
-    assert "crop=1296:2304" in vf
-    assert cmd.count("-i") == 2
+    assert r.status_code == 200
+    assert r.json()["id"]
 
 
-def test_render_still_missing_image_raises(tmp_path, monkeypatch):
-    audio = _touch(tmp_path / "n.mp3")
-    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
-    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 1.0)
-    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
-    with pytest.raises(RenderError, match="Image"):
-        render_still(
-            image_path=tmp_path / "missing.jpg",
-            audio_path=audio,
-            ass_path=ass,
-            output_path=tmp_path / "out.mp4",
-        )
+def test_create_with_media_upload_leni(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        assert rec.mode == "picture"
+        assert rec.ephemeral is True
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "leni",
+        },
+        files={"media": ("still.jpg", b"fake-img", "image/jpeg")},
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["mode"] == "picture"
+
+
+def test_create_rejects_both_media_and_source_name(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    (c.app.state.settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+        },
+        files={"media": ("clip.mp4", b"x", "video/mp4")},
+    )
+    assert r.status_code == 400
+
+
+def test_create_rejects_neither_media_nor_source(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_create_rejects_image_for_roblox(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+        },
+        files={"media": ("still.jpg", b"x", "image/jpeg")},
+    )
+    assert r.status_code == 400
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Run — expect FAIL** (JSON tests fail + new tests)
 
-Run: `pytest tests/test_render.py -v`
+Run: `pytest tests/web/test_api_v1.py -v`
 
-Expected: existing overlay tests PASS; new tests FAIL (`render_still` not defined).
+- [ ] **Step 3: Implement multipart handler**
 
-- [ ] **Step 3: Implement `render_still`**
-
-Add constants and function in `src/roblox_viral/render.py` after the overlay constants:
+Replace JSON body create with:
 
 ```python
-KEN_BURNS_ZOOM = 1.20
-KEN_BURNS_FPS = 30
+from fastapi import File, Form, UploadFile
+from roblox_viral.web import library as library_mod
+
+@router.post("/videos")
+async def create_video(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(require_api_key),
+    voice: str = Form(""),
+    story: str = Form(""),
+    type: str = Form(""),
+    source_name: str = Form(""),
+    media: UploadFile | None = File(None),
+) -> dict:
+    settings = request.app.state.settings
+    mgr: JobManager = request.app.state.job_manager
+    try:
+        mode = _mode_from_type(type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    has_media = media is not None and bool(getattr(media, "filename", None))
+    name = (source_name or "").strip()
+    if has_media and name:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either media file or source_name, not both",
+        )
+    if not has_media and not name:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide media file or source_name",
+        )
+
+    voice_s = (voice or "").strip() or DEFAULT_VOICE
+    ephemeral = False
+    input_bytes: bytes | None = None
+    stored_name = name
+
+    if has_media:
+        assert media is not None
+        raw_name = Path(media.filename or "upload.bin").name
+        data = await media.read()
+        try:
+            if mode == "picture":
+                if len(data) > library_mod.MAX_IMAGE_UPLOAD_BYTES:
+                    raise ValueError(
+                        f"Upload exceeds maximum size of "
+                        f"{library_mod.MAX_IMAGE_UPLOAD_BYTES} bytes"
+                    )
+                stored_name = library_mod.validate_image_filename(raw_name)
+            else:
+                if len(data) > library_mod.MAX_UPLOAD_BYTES:
+                    raise ValueError(
+                        f"Upload exceeds maximum size of "
+                        f"{library_mod.MAX_UPLOAD_BYTES} bytes"
+                    )
+                stored_name = library_mod.validate_video_filename(raw_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Normalize to input.<ext>
+        suffix = Path(stored_name).suffix.lower()
+        stored_name = f"input{suffix}"
+        ephemeral = True
+        input_bytes = data
+
+    try:
+        record = mgr.create(
+            settings,
+            stored_name,
+            story,
+            voice_s,
+            pitch=DEFAULT_PITCH,
+            speed=DEFAULT_SPEED,
+            mode=mode,
+            ken_burns=False,
+            ephemeral=ephemeral,
+        )
+    except BusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if input_bytes is not None:
+        dest = settings.jobs_dir / record.id / record.source_name
+        dest.write_bytes(input_bytes)
+
+    background_tasks.add_task(mgr.run_job, settings, record.id)
+    return {"id": record.id}
 ```
 
-Add after `render_video`:
+Remove unused `CreateVideoBody` if no longer needed.
 
-```python
-def render_still(
-    *,
-    image_path: Path | str,
-    audio_path: Path | str,
-    ass_path: Path | str,
-    output_path: Path | str,
-    ken_burns: bool = False,
-    work_dir: Path | str | None = None,
-) -> Path:
-    """Hold (or Ken-Burns zoom) an image for TTS duration; burn ASS; mux TTS. No overlay."""
-    ffmpeg = require_ffmpeg()
-    image = Path(image_path)
-    audio = Path(audio_path)
-    ass = Path(ass_path)
-    out = Path(output_path)
+Use capped read if preferred (reuse `_read_upload_capped` from app — either import/move helper to library or read-all then size-check as above). Size-check after read is OK for plan.
 
-    if not image.is_file():
-        raise RenderError(f"Image not found: {image}")
-    if not audio.is_file():
-        raise RenderError(f"Audio not found: {audio}")
-    if not ass.is_file():
-        raise RenderError(f"Captions not found: {ass}")
+- [ ] **Step 4: Run tests**
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if work_dir is not None:
-        Path(work_dir).mkdir(parents=True, exist_ok=True)
+Run: `pytest tests/web/test_api_v1.py tests/web/test_jobs.py -q`
 
-    audio_duration = probe_duration_seconds(audio)
-    ass_escaped = _ass_filter_path(ass)
-
-    if ken_burns:
-        cover_w = int(OUTPUT_WIDTH * KEN_BURNS_ZOOM)
-        cover_h = int(OUTPUT_HEIGHT * KEN_BURNS_ZOOM)
-        frames = max(1, round(audio_duration * KEN_BURNS_FPS))
-        zoom_delta = KEN_BURNS_ZOOM - 1.0
-        vf = (
-            f"scale={cover_w}:{cover_h}:force_original_aspect_ratio=increase,"
-            f"crop={cover_w}:{cover_h},"
-            f"zoompan=z='min(1+{zoom_delta}*on/{frames},{KEN_BURNS_ZOOM})':"
-            f"d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"s={OUTPUT_WIDTH}x{OUTPUT_HEIGHT}:fps={KEN_BURNS_FPS},"
-            f"ass='{ass_escaped}'"
-        )
-    else:
-        vf = (
-            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
-            f"ass='{ass_escaped}'"
-        )
-
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-loop",
-        "1",
-        "-framerate",
-        str(KEN_BURNS_FPS),
-        "-i",
-        str(image),
-        "-i",
-        str(audio),
-        "-t",
-        f"{audio_duration:.3f}",
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-vf",
-        vf,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "18",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-shortest",
-        "-movflags",
-        "+faststart",
-        str(out),
-    ]
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RenderError(
-            "ffmpeg render failed:\n"
-            + (result.stderr[-2000:] if result.stderr else "no stderr")
-        )
-    return out
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `pytest tests/test_render.py -v`
-
-Expected: PASS (including existing overlay tests).
+Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/roblox_viral/render.py tests/test_render.py
-git commit -m "feat: render still images to vertical storytime video"
+git add src/roblox_viral/web/api_v1.py tests/web/test_api_v1.py
+git commit -m "feat(web): accept multipart media on n8n video create"
 ```
 
 ---

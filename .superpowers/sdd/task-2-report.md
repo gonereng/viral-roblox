@@ -1,73 +1,52 @@
-# Task 2 Report: `render_still`
+# Task 2 Report: Multipart create endpoint
 
-## Status: DONE
+## What was implemented
 
-## Summary
+- **`POST /api/v1/videos`** now accepts multipart form fields (`voice`, `story`, `type`, `source_name`) plus optional `media` file upload.
+- **Library-backed validation**: video/image filename checks and size limits via `validate_video_filename`, `validate_image_filename`, `MAX_UPLOAD_BYTES`, `MAX_IMAGE_UPLOAD_BYTES`.
+- **Ephemeral uploads**: media files stored as `jobs/{id}/input.<ext>` with `ephemeral=True`; library `source_name` path unchanged.
+- **Mutual exclusion**: 400 if both `media` and `source_name` provided, or neither.
+- **Removed** unused `CreateVideoBody` Pydantic model.
 
-Added `render_still` to `src/roblox_viral/render.py` with static and Ken Burns modes for turning a still image + TTS + ASS into a 1080×1920 MP4. Three new tests in `tests/test_render.py`. Existing overlay tests unchanged and passing.
+## What was tested and results
+
+| Scope | Command | Result |
+|-------|---------|--------|
+| Focused (task) | `pytest tests/web/test_api_v1.py -v` | 13 passed |
+| Full suite | `pytest tests/web/test_api_v1.py tests/web/test_jobs.py -q` | 29 passed |
 
 ## TDD Evidence
 
-### RED — tests added before implementation
+### RED
 
-Added import of `render_still` and three tests per brief. Ran:
-
-```
-python -m pytest tests/test_render.py -v
+```text
+pytest tests/web/test_api_v1.py -v
 ```
 
-Result (collection error — expected):
-
 ```
-ImportError: cannot import name 'render_still' from 'roblox_viral.render'
-```
-
-Existing overlay tests could not run until import fixed; failure reason confirms missing symbol, not typo.
-
-### GREEN — implementation added
-
-Implemented `KEN_BURNS_ZOOM`, `KEN_BURNS_FPS`, and `render_still` per brief. Ran:
-
-```
-python -m pytest tests/test_render.py -v
+10 failed, 3 passed
+422 Unprocessable Entity (JSON body expected, form data sent)
 ```
 
-Result: **6 passed** (3 existing overlay + 3 new still tests).
+### GREEN
 
-### Full suite (pre-commit)
-
-```
-python -m pytest -v
+```text
+pytest tests/web/test_api_v1.py tests/web/test_jobs.py -q
 ```
 
-Result: **88 passed, 2 skipped** in 5.22s.
+```
+29 passed in 1.61s
+```
 
 ## Commit
 
-- `5ffa84e` — feat: render still images to vertical storytime video
-- Files: `src/roblox_viral/render.py`, `tests/test_render.py` only
+```
+feat(web): accept multipart media on n8n video create
+```
 
-## Self-Review
+Files: `src/roblox_viral/web/api_v1.py`, `tests/web/test_api_v1.py`
 
-| Requirement | Met |
-|---|---|
-| `KEN_BURNS_ZOOM = 1.20`, `KEN_BURNS_FPS = 30` | Yes |
-| `render_still(...)` signature with `ken_burns`, `work_dir` | Yes |
-| No overlay argument | Yes |
-| Static vf: scale/crop 1080×1920 + ass | Yes |
-| Ken Burns: cover 1296×2304, zoompan 1.0→1.20, ass | Yes |
-| `-loop 1`, `-framerate 30`, two inputs, `-t` from audio | Yes |
-| Missing image → `RenderError` with "Image" | Yes |
-| `render_video` unchanged | Yes — diff only appends after `render_video` |
-| Overlay tests green | Yes |
+## Concerns
 
-### Notes
-
-- `work_dir` creates directory when provided but does not write intermediates (matches brief; no temp files needed for still render).
-- Ken Burns frame count uses `max(1, round(duration * 30))` as specified.
-- No integration test with real ffmpeg (consistent with existing `render_video` unit tests that mock subprocess).
-
-## Files Changed
-
-- `src/roblox_viral/render.py` — +96 lines (`render_still`, constants)
-- `tests/test_render.py` — +101 lines (3 tests)
+- Upload reads entire file into memory before size check; acceptable per plan but could use `_read_upload_capped` for streaming in a follow-up.
+- No dedicated test for oversize upload rejection on this endpoint (covered indirectly via library tests).

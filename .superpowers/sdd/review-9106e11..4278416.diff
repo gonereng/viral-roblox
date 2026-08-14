@@ -1,0 +1,198 @@
+# Review package: 9106e11cdb046cc6a6c564051e415f5958c84a0e..4278416
+
+## Commits
+4278416 feat(web): add API_KEY settings and require_api_key
+
+## Files changed
+ src/roblox_viral/web/auth.py   | 24 +++++++++++++++++++++++-
+ src/roblox_viral/web/config.py |  3 +++
+ tests/web/test_api_key_auth.py | 39 +++++++++++++++++++++++++++++++++++++++
+ tests/web/test_config.py       |  9 +++++++++
+ 4 files changed, 74 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/src/roblox_viral/web/auth.py b/src/roblox_viral/web/auth.py
+index 7c0d693..9cb9bb2 100644
+--- a/src/roblox_viral/web/auth.py
++++ b/src/roblox_viral/web/auth.py
+@@ -1,14 +1,16 @@
+ from __future__ import annotations
+ 
++import secrets
++
+ from fastapi import HTTPException, Request
+-from starlette.status import HTTP_303_SEE_OTHER, HTTP_401_UNAUTHORIZED
++from starlette.status import HTTP_303_SEE_OTHER, HTTP_401_UNAUTHORIZED, HTTP_503_SERVICE_UNAVAILABLE
+ 
+ 
+ SESSION_AUTH_KEY = "authenticated"
+ 
+ 
+ def is_authenticated(request: Request) -> bool:
+     return bool(request.session.get(SESSION_AUTH_KEY))
+ 
+ 
+ def set_authenticated(request: Request, value: bool = True) -> None:
+@@ -28,10 +30,30 @@ def wants_json(request: Request) -> bool:
+ async def require_login(request: Request) -> None:
+     if is_authenticated(request):
+         return
+     if wants_json(request):
+         raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+     raise HTTPException(
+         status_code=HTTP_303_SEE_OTHER,
+         detail="Redirect to login",
+         headers={"Location": "/login"},
+     )
++
++
++async def require_api_key(request: Request) -> None:
++    settings = request.app.state.settings
++    expected = (settings.api_key or "").strip()
++    if not expected:
++        raise HTTPException(
++            status_code=HTTP_503_SERVICE_UNAVAILABLE,
++            detail="API key not configured",
++        )
++    provided = request.headers.get("X-API-Key") or ""
++    try:
++        ok = secrets.compare_digest(provided, expected)
++    except ValueError:
++        ok = False
++    if not ok:
++        raise HTTPException(
++            status_code=HTTP_401_UNAUTHORIZED,
++            detail="Invalid API key",
++        )
+diff --git a/src/roblox_viral/web/config.py b/src/roblox_viral/web/config.py
+index 07671fb..967df8e 100644
+--- a/src/roblox_viral/web/config.py
++++ b/src/roblox_viral/web/config.py
+@@ -31,20 +31,21 @@ def resolve_overlay_video_path(
+ 
+ @dataclass(frozen=True)
+ class Settings:
+     media_root: Path
+     app_password: str
+     app_secret: str
+     require_password: bool = True
+     gemini_api_key: str = ""
+     youtube_cookies: str = ""
+     overlay_video: str = ""
++    api_key: str = ""
+ 
+     @property
+     def sources_dir(self) -> Path:
+         return self.media_root / "sources"
+ 
+     @property
+     def images_dir(self) -> Path:
+         return self.media_root / "images"
+ 
+     @property
+@@ -84,24 +85,26 @@ class Settings:
+         secret = os.environ.get("APP_SECRET", "")
+         require = os.environ.get("APP_REQUIRE_PASSWORD", "1") not in ("0", "false", "False")
+         if require and not password:
+             raise RuntimeError("APP_PASSWORD is required")
+         if not secret:
+             secret = secrets.token_hex(32)
+             warnings.warn("APP_SECRET unset; using ephemeral secret (sessions reset on restart)", stacklevel=2)
+         gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+         youtube_cookies = os.environ.get("YOUTUBE_COOKIES", "")
+         overlay_video = os.environ.get("OVERLAY_VIDEO", "")
++        api_key = os.environ.get("API_KEY", "")
+         return cls(
+             media_root=media,
+             app_password=password,
+             app_secret=secret,
+             require_password=require,
+             gemini_api_key=gemini_api_key,
+             youtube_cookies=youtube_cookies,
+             overlay_video=overlay_video,
++            api_key=api_key,
+         )
+ 
+ 
+ @lru_cache
+ def get_settings() -> Settings:
+     return Settings.from_env()
+diff --git a/tests/web/test_api_key_auth.py b/tests/web/test_api_key_auth.py
+new file mode 100644
+index 0000000..cb36727
+--- /dev/null
++++ b/tests/web/test_api_key_auth.py
+@@ -0,0 +1,39 @@
++from fastapi import Depends, FastAPI
++from fastapi.testclient import TestClient
++
++from roblox_viral.web.auth import require_api_key
++from roblox_viral.web.config import Settings
++
++
++def _app(settings: Settings) -> TestClient:
++    app = FastAPI()
++    app.state.settings = settings
++
++    @app.get("/probe")
++    async def probe(_: None = Depends(require_api_key)):
++        return {"ok": True}
++
++    return TestClient(app)
++
++
++def test_require_api_key_503_when_unset(tmp_path, monkeypatch):
++    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
++    monkeypatch.setenv("APP_PASSWORD", "x")
++    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
++    monkeypatch.delenv("API_KEY", raising=False)
++    s = Settings.from_env()
++    c = _app(s)
++    r = c.get("/probe", headers={"X-API-Key": "anything"})
++    assert r.status_code == 503
++
++
++def test_require_api_key_401_and_200(tmp_path, monkeypatch):
++    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
++    monkeypatch.setenv("APP_PASSWORD", "x")
++    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
++    monkeypatch.setenv("API_KEY", "good")
++    s = Settings.from_env()
++    c = _app(s)
++    assert c.get("/probe").status_code == 401
++    assert c.get("/probe", headers={"X-API-Key": "bad"}).status_code == 401
++    assert c.get("/probe", headers={"X-API-Key": "good"}).status_code == 200
+diff --git a/tests/web/test_config.py b/tests/web/test_config.py
+index 02e48c0..3d007cd 100644
+--- a/tests/web/test_config.py
++++ b/tests/web/test_config.py
+@@ -62,20 +62,29 @@ def test_overlay_video_path_default_and_env(tmp_path: Path, monkeypatch):
+     overlay.write_bytes(b"fake")
+     assert settings.overlay_video_path == overlay
+ 
+     other = tmp_path / "other_overlay.mp4"
+     other.write_bytes(b"fake")
+     monkeypatch.setenv("OVERLAY_VIDEO", str(other))
+     settings2 = Settings.from_env()
+     assert settings2.overlay_video_path == other
+ 
+ 
++def test_api_key_from_env(tmp_path: Path, monkeypatch):
++    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
++    monkeypatch.setenv("APP_PASSWORD", "secret")
++    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
++    monkeypatch.setenv("API_KEY", "n8n-secret")
++    settings = Settings.from_env()
++    assert settings.api_key == "n8n-secret"
++
++
+ def test_resolve_overlay_falls_back_to_packaged(tmp_path: Path, monkeypatch):
+     from roblox_viral.web.config import resolve_overlay_video_path
+ 
+     monkeypatch.delenv("OVERLAY_VIDEO", raising=False)
+     media = tmp_path / "empty-media"
+     media.mkdir()
+     path = resolve_overlay_video_path(media_root=media, overlay_video="")
+     assert path is not None
+     assert path.is_file()
+     assert path.name == "overlay.mp4"

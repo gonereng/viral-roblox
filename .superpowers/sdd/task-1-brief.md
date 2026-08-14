@@ -1,177 +1,155 @@
-### Task 1: Image library helpers
+### Task 1: JobManager ephemeral input
 
 **Files:**
-- Modify: `src/roblox_viral/web/config.py`
-- Modify: `src/roblox_viral/web/library.py`
-- Modify: `tests/web/test_config.py`
-- Modify: `tests/web/test_library.py`
+- Modify: `src/roblox_viral/web/jobs.py`
+- Modify: `tests/web/test_jobs.py`
 
 **Interfaces:**
-- Consumes: `Settings.media_root`
 - Produces:
-  - `Settings.images_dir` → `self.media_root / "images"`
-  - `MAX_IMAGE_UPLOAD_BYTES = 20_000_000`
-  - `SourceImage(name: str, path: Path, size_bytes: int)`
-  - `list_images(settings: Settings) -> list[SourceImage]`
-  - `resolve_image(settings: Settings, name: str) -> Path`
-  - `save_image(settings: Settings, filename: str, data: bytes) -> SourceImage`
-  - `delete_image(settings: Settings, name: str) -> None`
-  - Collision: if dest exists, `{stem}-{uuid.uuid4().hex[:8]}{suffix}`
-  - Temp write then rename; unlink temp on failure
+  - `JobRecord.ephemeral: bool = False`
+  - `JobManager.create(..., ephemeral: bool = False)`
+  - When `ephemeral=True`: do **not** call `resolve_source` / `resolve_image`; still validate `mode`; `source_name` must be a safe basename only (`Path(name).name == name` and match video or image regex based on mode)
+  - Hydrate `ephemeral` from status.json (`bool(data.get("ephemeral", False))`)
+  - `run_job`: if `record.ephemeral`: `media_path = (jobs_dir/job_id / record.source_name).resolve()`; require file under job_dir; else existing resolve_*
 
 - [ ] **Step 1: Write failing tests**
 
-Add to `tests/web/test_config.py` inside `test_ensure_media_dirs`:
-
 ```python
-    assert settings.images_dir.is_dir()
+# append to tests/web/test_jobs.py
+def test_create_ephemeral_skips_library(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    # no sources/images files
+    job = mgr.create(
+        s,
+        "input.mp4",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        mode="roblox",
+        ephemeral=True,
+    )
+    assert job.ephemeral is True
+    assert job.source_name == "input.mp4"
+
+
+def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    seen = {}
+
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        seen["video_path"] = Path(kwargs["video_path"])
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(
+        s,
+        "input.mp4",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        mode="roblox",
+        ephemeral=True,
+    )
+    input_path = s.jobs_dir / job.id / "input.mp4"
+    input_path.write_bytes(b"vid")
+    mgr.run_job(s, job.id)
+    assert mgr.get(job.id, s).status == "done"
+    assert seen["video_path"] == input_path.resolve()
 ```
 
-Append to `tests/web/test_library.py`:
+Adapt `_settings` / imports to match the file (`WordTiming`, `Path`).
+
+- [ ] **Step 2: Run — expect FAIL**
+
+Run: `pytest tests/web/test_jobs.py -k ephemeral -v`
+
+- [ ] **Step 3: Implement**
+
+In `JobRecord` add `ephemeral: bool = False`.
+
+In `create`, add `ephemeral: bool = False` before building record:
 
 ```python
-def test_save_list_delete_image(tmp_path, monkeypatch):
-    s = _settings(tmp_path, monkeypatch)
-    saved = library.save_image(s, "photo.jpg", b"jpeg-bytes")
-    assert saved.name == "photo.jpg"
-    assert saved.path == s.images_dir / "photo.jpg"
-    assert saved.path.read_bytes() == b"jpeg-bytes"
-    listed = library.list_images(s)
-    assert [i.name for i in listed] == ["photo.jpg"]
-    assert library.resolve_image(s, "photo.jpg") == saved.path
-    library.delete_image(s, "photo.jpg")
-    assert library.list_images(s) == []
-
-
-def test_save_image_unique_on_collision(tmp_path, monkeypatch):
-    s = _settings(tmp_path, monkeypatch)
-    first = library.save_image(s, "photo.jpg", b"a")
-    second = library.save_image(s, "photo.jpg", b"b")
-    assert first.name == "photo.jpg"
-    assert second.name != "photo.jpg"
-    assert second.name.startswith("photo-")
-    assert second.name.endswith(".jpg")
-    assert {first.name, second.name} == {i.name for i in library.list_images(s)}
-
-
-def test_save_image_rejects_oversize_and_unsafe(tmp_path, monkeypatch):
-    s = _settings(tmp_path, monkeypatch)
-    monkeypatch.setattr(library, "MAX_IMAGE_UPLOAD_BYTES", 10)
-    with pytest.raises(ValueError, match="maximum size"):
-        library.save_image(s, "photo.jpg", b"x" * 11)
-    assert list(s.images_dir.iterdir()) == []
-    with pytest.raises(ValueError):
-        library.save_image(s, "evil.exe", b"xx")
-    with pytest.raises(ValueError):
-        library.resolve_image(s, "../evil.jpg")
-    with pytest.raises(ValueError):
-        library.resolve_image(s, "clip.mp4")
-
-
-def test_images_not_listed_as_video_sources(tmp_path, monkeypatch):
-    s = _settings(tmp_path, monkeypatch)
-    library.save_image(s, "still.png", b"png")
-    (s.sources_dir / "clip.mp4").write_bytes(b"vid")
-    assert [x.name for x in library.list_sources(s)] == ["clip.mp4"]
-    assert [x.name for x in library.list_images(s)] == ["still.png"]
+        if mode not in ("roblox", "picture"):
+            raise ValueError(f"Invalid mode: {mode!r}")
+        if ephemeral:
+            safe = Path(source_name).name
+            if safe != source_name or not safe:
+                raise ValueError("Invalid source_name")
+            if mode == "picture":
+                from roblox_viral.web.library import _safe_image_name
+                source_name = _safe_image_name(safe)
+            else:
+                from roblox_viral.web.library import _safe_name
+                source_name = _safe_name(safe)
+                ken_burns = False
+        elif mode == "picture":
+            resolve_image(settings, source_name)
+        else:
+            resolve_source(settings, source_name)
+            ken_burns = False
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `pytest tests/web/test_config.py::test_ensure_media_dirs tests/web/test_library.py -v`
-
-Expected: `images_dir` assertion fails and image helper tests fail with `ImportError` / `AttributeError`.
-
-- [ ] **Step 3: Implement helpers**
-
-In `src/roblox_viral/web/config.py`, add property and include it in `ensure_media_dirs`:
+Prefer exporting small public helpers instead of importing `_safe_*` if cleaner — e.g. add `validate_video_filename` / `validate_image_filename` in `library.py` that wrap `_safe_*`. Minimal approach: import `_safe_name` / `_safe_image_name` (already used pattern) OR call them via new public aliases:
 
 ```python
-    @property
-    def images_dir(self) -> Path:
-        return self.media_root / "images"
+# library.py
+def validate_video_filename(name: str) -> str:
+    return _safe_name(name)
 
-    def ensure_media_dirs(self) -> None:
-        for d in (self.sources_dir, self.images_dir, self.outputs_dir, self.jobs_dir):
-            d.mkdir(parents=True, exist_ok=True)
+def validate_image_filename(name: str) -> str:
+    return _safe_image_name(name)
 ```
 
-In `src/roblox_viral/web/library.py`, add next to the video helpers:
+Use those from jobs.
+
+Pass `ephemeral=ephemeral` into `JobRecord(...)`.
+
+In `get()` hydration add `ephemeral=bool(data.get("ephemeral", False))`.
+
+In `run_job`:
 
 ```python
-_SAFE_IMAGE_NAME = re.compile(r"^[A-Za-z0-9._ -]+\.(jpg|jpeg|png|webp)$", re.I)
-MAX_IMAGE_UPLOAD_BYTES = 20_000_000
+            job_dir = settings.jobs_dir / job_id
+            ...
+            if record.ephemeral:
+                media_path = (job_dir / record.source_name).resolve()
+                if not media_path.is_relative_to(job_dir.resolve()) or not media_path.is_file():
+                    raise FileNotFoundError(record.source_name)
+            elif record.mode == "picture":
+                media_path = resolve_image(settings, record.source_name)
+            else:
+                media_path = resolve_source(settings, record.source_name)
 
-
-@dataclass(frozen=True)
-class SourceImage:
-    name: str
-    path: Path
-    size_bytes: int
-
-
-def _safe_image_name(name: str) -> str:
-    base = Path(name).name
-    if base != name or not _SAFE_IMAGE_NAME.match(base):
-        raise ValueError(f"Invalid image filename: {name!r}")
-    return base
-
-
-def list_images(settings: Settings) -> list[SourceImage]:
-    items: list[SourceImage] = []
-    if not settings.images_dir.is_dir():
-        return items
-    for path in sorted(settings.images_dir.iterdir()):
-        if path.is_file() and _SAFE_IMAGE_NAME.match(path.name) and not path.name.startswith("."):
-            items.append(SourceImage(path.name, path, path.stat().st_size))
-    return items
-
-
-def resolve_image(settings: Settings, name: str) -> Path:
-    safe = _safe_image_name(name)
-    path = (settings.images_dir / safe).resolve()
-    if not path.is_relative_to(settings.images_dir.resolve()):
-        raise ValueError("Invalid path")
-    if not path.is_file():
-        raise FileNotFoundError(safe)
-    return path
-
-
-def save_image(settings: Settings, filename: str, data: bytes) -> SourceImage:
-    if len(data) > MAX_IMAGE_UPLOAD_BYTES:
-        raise ValueError(
-            f"Upload exceeds maximum size of {MAX_IMAGE_UPLOAD_BYTES} bytes"
-        )
-    safe = _safe_image_name(filename)
-    settings.images_dir.mkdir(parents=True, exist_ok=True)
-    dest = settings.images_dir / safe
-    if dest.exists():
-        dest = settings.images_dir / f"{Path(safe).stem}-{uuid.uuid4().hex[:8]}{Path(safe).suffix.lower()}"
-    temp = settings.images_dir / f".upload-{uuid.uuid4().hex}{Path(safe).suffix.lower()}"
-    try:
-        temp.write_bytes(data)
-        temp.replace(dest)
-    except Exception:
-        temp.unlink(missing_ok=True)
-        raise
-    return SourceImage(dest.name, dest, dest.stat().st_size)
-
-
-def delete_image(settings: Settings, name: str) -> None:
-    resolve_image(settings, name).unlink()
+            if record.mode == "picture":
+                render_still(image_path=media_path, ...)
+            else:
+                render_video(video_path=media_path, ...)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Run tests**
 
-Run: `pytest tests/web/test_config.py::test_ensure_media_dirs tests/web/test_library.py -v`
+Run: `pytest tests/web/test_jobs.py -q`
 
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/roblox_viral/web/config.py src/roblox_viral/web/library.py tests/web/test_config.py tests/web/test_library.py
-git commit -m "feat(web): image library helpers under media/images"
+git add src/roblox_viral/web/jobs.py src/roblox_viral/web/library.py tests/web/test_jobs.py
+git commit -m "feat(web): ephemeral job-local media for renders"
 ```
 
 ---
