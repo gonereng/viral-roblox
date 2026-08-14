@@ -1,0 +1,122 @@
+from fastapi.testclient import TestClient
+
+from roblox_viral.web.app import create_app
+from roblox_viral.web.config import Settings
+from roblox_viral.web.jobs import JobManager
+from roblox_viral.web.voices import clear_cache
+
+API_KEY = "test-key"
+
+
+def _client(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+    monkeypatch.setenv("APP_PASSWORD", "s3cret")
+    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+    monkeypatch.setenv("API_KEY", API_KEY)
+    clear_cache()
+    return TestClient(create_app(Settings.from_env()))
+
+
+def _headers():
+    return {"X-API-Key": API_KEY}
+
+
+def test_create_roblox_video_returns_id(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        out = settings.outputs_dir / rec.output_name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"mp4")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        json={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hello world.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+        },
+    )
+    assert r.status_code == 200
+    job_id = r.json()["id"]
+    assert job_id
+    st = c.get(f"/api/v1/videos/{job_id}", headers=_headers())
+    assert st.status_code == 200
+    assert st.json()["status"] == "done"
+    assert st.json()["mode"] == "roblox"
+
+
+def test_create_leni_maps_to_picture(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    (settings.images_dir / "still.jpg").write_bytes(b"img")
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        json={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "leni",
+            "source_name": "still.jpg",
+        },
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["mode"] == "picture"
+
+
+def test_create_bad_type_400(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        json={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "other",
+            "source_name": "clip.mp4",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_create_busy_409(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    mgr: JobManager = c.app.state.job_manager
+    mgr._active_id = "busy"
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        json={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+        },
+    )
+    assert r.status_code == 409

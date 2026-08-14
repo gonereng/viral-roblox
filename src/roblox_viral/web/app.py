@@ -28,6 +28,7 @@ from roblox_viral.voice import (
     format_edge_pitch,
     format_edge_rate,
 )
+from roblox_viral.web.api_v1 import router as api_v1_router
 from roblox_viral.web.auth import require_login, set_authenticated
 from roblox_viral.web.config import Settings, get_settings
 from roblox_viral.web.gemini import generate_story
@@ -99,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.job_manager = JobManager()
     app.add_middleware(SessionMiddleware, secret_key=settings.app_secret)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.include_router(api_v1_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
