@@ -91,12 +91,38 @@ Optional env vars:
 
 ### n8n API
 
-Set `API_KEY` in `.env`. Then:
+Set `API_KEY` in `.env`. Header: `X-API-Key`.
 
-1. `POST /api/v1/videos` with header `X-API-Key` and JSON
-   `{ "voice", "story", "type": "roblox"|"leni", "source_name" }` → `{ "id" }`
-2. Poll `GET /api/v1/videos/{id}` until `status` is `done` or `error`
-3. `GET /api/v1/videos/{id}/download` → MP4 (`409` while rendering)
+**Create** — `POST /api/v1/videos` as `multipart/form-data`:
+
+- `voice`, `story`, `type` (`roblox`|`leni`)
+- either file field `media` **or** text field `source_name` (Library name)
+
+Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`.
+
+PowerShell (upload):
+
+```powershell
+$headers = @{ "X-API-Key" = "your-key" }
+$form = @{
+  voice = "en-US-EmmaNeural"
+  story = "Hello.`nWorld."
+  type  = "roblox"
+  media = Get-Item "C:\path\to\clip.mp4"
+}
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/api/v1/videos" -Headers $headers -Form $form
+```
+
+PowerShell (Library name):
+
+```powershell
+$form = @{
+  voice = "en-US-EmmaNeural"
+  story = "Hello.`nWorld."
+  type  = "roblox"
+  source_name = "gameplay-1.mp4"
+}
+```
 
 ### Docker
 
