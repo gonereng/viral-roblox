@@ -10,6 +10,7 @@ def test_ensure_media_dirs(tmp_path: Path, monkeypatch):
     settings = Settings.from_env()
     settings.ensure_media_dirs()
     assert settings.sources_dir.is_dir()
+    assert settings.images_dir.is_dir()
     assert settings.outputs_dir.is_dir()
     assert settings.jobs_dir.is_dir()
 

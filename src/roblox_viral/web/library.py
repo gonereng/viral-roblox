@@ -11,12 +11,21 @@ from roblox_viral.render import RenderError, probe_duration_seconds, require_ffm
 from roblox_viral.web.config import Settings
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._ -]+\.(mp4|mov|webm|mkv)$", re.I)
+_SAFE_IMAGE_NAME = re.compile(r"^[A-Za-z0-9._ -]+\.(jpg|jpeg|png|webp)$", re.I)
 MAX_UPLOAD_BYTES = 500_000_000
+MAX_IMAGE_UPLOAD_BYTES = 20_000_000
 SLICE_SECONDS = 60
 
 
 @dataclass(frozen=True)
 class SourceVideo:
+    name: str
+    path: Path
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class SourceImage:
     name: str
     path: Path
     size_bytes: int
@@ -33,6 +42,13 @@ def _safe_name(name: str) -> str:
     base = Path(name).name
     if base != name or not _SAFE_NAME.match(base):
         raise ValueError(f"Invalid video filename: {name!r}")
+    return base
+
+
+def _safe_image_name(name: str) -> str:
+    base = Path(name).name
+    if base != name or not _SAFE_IMAGE_NAME.match(base):
+        raise ValueError(f"Invalid image filename: {name!r}")
     return base
 
 
@@ -66,6 +82,16 @@ def list_sources(settings: Settings) -> list[SourceVideo]:
     return items
 
 
+def list_images(settings: Settings) -> list[SourceImage]:
+    items: list[SourceImage] = []
+    if not settings.images_dir.is_dir():
+        return items
+    for path in sorted(settings.images_dir.iterdir()):
+        if path.is_file() and _SAFE_IMAGE_NAME.match(path.name) and not path.name.startswith("."):
+            items.append(SourceImage(path.name, path, path.stat().st_size))
+    return items
+
+
 def list_outputs(settings: Settings, *, limit: int = 10) -> list[OutputVideo]:
     paths = [
         p
@@ -80,6 +106,16 @@ def resolve_source(settings: Settings, name: str) -> Path:
     safe = _safe_name(name)
     path = (settings.sources_dir / safe).resolve()
     if not path.is_relative_to(settings.sources_dir.resolve()):
+        raise ValueError("Invalid path")
+    if not path.is_file():
+        raise FileNotFoundError(safe)
+    return path
+
+
+def resolve_image(settings: Settings, name: str) -> Path:
+    safe = _safe_image_name(name)
+    path = (settings.images_dir / safe).resolve()
+    if not path.is_relative_to(settings.images_dir.resolve()):
         raise ValueError("Invalid path")
     if not path.is_file():
         raise FileNotFoundError(safe)
@@ -187,5 +223,29 @@ def save_upload(settings: Settings, filename: str, data: bytes) -> list[SourceVi
         temp.unlink(missing_ok=True)
 
 
+def save_image(settings: Settings, filename: str, data: bytes) -> SourceImage:
+    if len(data) > MAX_IMAGE_UPLOAD_BYTES:
+        raise ValueError(
+            f"Upload exceeds maximum size of {MAX_IMAGE_UPLOAD_BYTES} bytes"
+        )
+    safe = _safe_image_name(filename)
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    dest = settings.images_dir / safe
+    if dest.exists():
+        dest = settings.images_dir / f"{Path(safe).stem}-{uuid.uuid4().hex[:8]}{Path(safe).suffix.lower()}"
+    temp = settings.images_dir / f".upload-{uuid.uuid4().hex}{Path(safe).suffix.lower()}"
+    try:
+        temp.write_bytes(data)
+        temp.replace(dest)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+    return SourceImage(dest.name, dest, dest.stat().st_size)
+
+
 def delete_source(settings: Settings, name: str) -> None:
     resolve_source(settings, name).unlink()
+
+
+def delete_image(settings: Settings, name: str) -> None:
+    resolve_image(settings, name).unlink()

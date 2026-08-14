@@ -129,3 +129,49 @@ def test_save_upload_rejects_under_one_minute(tmp_path, monkeypatch):
     )
     with pytest.raises(ValueError, match="at least 1 minute"):
         library.save_upload(s, "short.mp4", raw.read_bytes())
+
+
+def test_save_list_delete_image(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    saved = library.save_image(s, "photo.jpg", b"jpeg-bytes")
+    assert saved.name == "photo.jpg"
+    assert saved.path == s.images_dir / "photo.jpg"
+    assert saved.path.read_bytes() == b"jpeg-bytes"
+    listed = library.list_images(s)
+    assert [i.name for i in listed] == ["photo.jpg"]
+    assert library.resolve_image(s, "photo.jpg") == saved.path
+    library.delete_image(s, "photo.jpg")
+    assert library.list_images(s) == []
+
+
+def test_save_image_unique_on_collision(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    first = library.save_image(s, "photo.jpg", b"a")
+    second = library.save_image(s, "photo.jpg", b"b")
+    assert first.name == "photo.jpg"
+    assert second.name != "photo.jpg"
+    assert second.name.startswith("photo-")
+    assert second.name.endswith(".jpg")
+    assert {first.name, second.name} == {i.name for i in library.list_images(s)}
+
+
+def test_save_image_rejects_oversize_and_unsafe(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(library, "MAX_IMAGE_UPLOAD_BYTES", 10)
+    with pytest.raises(ValueError, match="maximum size"):
+        library.save_image(s, "photo.jpg", b"x" * 11)
+    assert list(s.images_dir.iterdir()) == []
+    with pytest.raises(ValueError):
+        library.save_image(s, "evil.exe", b"xx")
+    with pytest.raises(ValueError):
+        library.resolve_image(s, "../evil.jpg")
+    with pytest.raises(ValueError):
+        library.resolve_image(s, "clip.mp4")
+
+
+def test_images_not_listed_as_video_sources(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    library.save_image(s, "still.png", b"png")
+    (s.sources_dir / "clip.mp4").write_bytes(b"vid")
+    assert [x.name for x in library.list_sources(s)] == ["clip.mp4"]
+    assert [x.name for x in library.list_images(s)] == ["still.png"]

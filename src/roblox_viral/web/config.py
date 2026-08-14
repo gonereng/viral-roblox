@@ -44,6 +44,10 @@ class Settings:
         return self.media_root / "sources"
 
     @property
+    def images_dir(self) -> Path:
+        return self.media_root / "images"
+
+    @property
     def outputs_dir(self) -> Path:
         return self.media_root / "outputs"
 
@@ -70,7 +74,7 @@ class Settings:
         return resolve_overlay_video_path(self.media_root, self.overlay_video)
 
     def ensure_media_dirs(self) -> None:
-        for d in (self.sources_dir, self.outputs_dir, self.jobs_dir):
+        for d in (self.sources_dir, self.images_dir, self.outputs_dir, self.jobs_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     @classmethod
