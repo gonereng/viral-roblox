@@ -1,54 +1,95 @@
-# Task 1 Report: Edge pitch/rate helpers + provider
+# Task 1 Report: Image library helpers
 
-## Status: DONE
+## What was implemented
 
-## Summary
+- **`Settings.images_dir`** property returning `media_root / "images"`, included in `ensure_media_dirs()`.
+- **Image library helpers** in `library.py`:
+  - `SourceImage` dataclass
+  - `MAX_IMAGE_UPLOAD_BYTES = 20_000_000`
+  - `list_images`, `resolve_image`, `save_image`, `delete_image`
+  - Safe filename validation for `.jpg`, `.jpeg`, `.png`, `.webp`
+  - Collision handling via `{stem}-{uuid8}{suffix}`
+  - Atomic temp write + rename with temp cleanup on failure
+- **Tests** for config dir creation, CRUD flow, collision, oversize/unsafe rejection, and separation from video sources.
 
-Implemented Edge TTS pitch and rate formatting helpers plus provider kwargs per the task brief. Followed TDD: failing tests → implementation → all tests passing → commit.
+## What was tested and results
 
-## Changes
+| Scope | Command | Result |
+|-------|---------|--------|
+| Focused (task) | `python -m pytest tests/web/test_config.py::test_ensure_media_dirs tests/web/test_library.py -v` | 10 passed, 2 skipped |
+| Full suite | `python -m pytest -v` | 84 passed, 2 skipped |
 
-### `src/roblox_viral/voice.py`
+## TDD Evidence
 
-- Added constants: `DEFAULT_PITCH = 15`, `DEFAULT_SPEED = 130`, `PITCH_MIN/PITCH_MAX = -50/50`, `SPEED_MIN/SPEED_MAX = 50/200`
-- Added `format_edge_pitch(pitch: int) -> str` — validates int range, formats signed Hz strings (`0` → `"+0Hz"`, positive `"+{n}Hz"`, negative `"{n}Hz"`)
-- Added `format_edge_rate(speed_percent: int) -> str` — validates int range, converts percent to delta from 100, formats signed percent strings
-- Updated `EdgeTTSProvider.__init__` with keyword-only `rate` and `pitch` parameters (defaults `"+0%"`, `"+0Hz"`)
-- Updated `edge_tts.Communicate(...)` call to pass `rate=self.rate`, `pitch=self.pitch`, `boundary="WordBoundary"`
+### RED
 
-### `tests/test_voice.py` (new)
-
-- `test_format_edge_pitch_defaults_and_signs`
-- `test_format_edge_pitch_rejects_out_of_range`
-- `test_format_edge_rate_defaults_and_signs`
-- `test_format_edge_rate_rejects_out_of_range`
-- `test_edge_tts_provider_passes_rate_and_pitch`
-
-## Test Results
-
-```
-pytest tests/test_voice.py -v
-5 passed in 0.12s
+```text
+python -m pytest tests/web/test_config.py::test_ensure_media_dirs tests/web/test_library.py -v
 ```
 
-### TDD verification
-
-- Step 2 (pre-implementation): ImportError — `cannot import name 'DEFAULT_PITCH'` — confirmed failing state
-- Step 4 (post-implementation): 5/5 PASSED
-
-## Commit
-
 ```
-feat: Edge TTS pitch and rate formatting
+FAILED tests/web/test_config.py::test_ensure_media_dirs - AttributeError: 'Settings' object has no attribute 'images_dir'
+FAILED tests/web/test_library.py::test_save_list_delete_image - AttributeError: module 'roblox_viral.web.library' has no attribute 'save_image'
+FAILED tests/web/test_library.py::test_save_image_unique_on_collision - AttributeError: module 'roblox_viral.web.library' has no attribute 'save_image'
+FAILED tests/web/test_library.py::test_save_image_rejects_oversize_and_unsafe - AttributeError: ... has no attribute 'MAX_IMAGE_UPLOAD_BYTES'
+FAILED tests/web/test_library.py::test_images_not_listed_as_video_sources - AttributeError: module 'roblox_viral.web.library' has no attribute 'save_image'
+=================== 5 failed, 5 passed, 2 skipped in 0.75s ====================
 ```
 
-Files committed: `src/roblox_viral/voice.py`, `tests/test_voice.py`
+### GREEN
 
-## Concerns
+```text
+python -m pytest tests/web/test_config.py::test_ensure_media_dirs tests/web/test_library.py -v
+```
 
-None.
+```
+======================== 10 passed, 2 skipped in 0.27s ========================
+```
 
-## Out of Scope (later tasks)
+## Files changed
 
-- Wiring pitch/speed into jobs, API, and UI
-- Using `DEFAULT_PITCH` / `DEFAULT_SPEED` at call sites (helpers exported for downstream tasks)
+- `src/roblox_viral/web/config.py`
+- `src/roblox_viral/web/library.py`
+- `tests/web/test_config.py`
+- `tests/web/test_library.py`
+
+## Self-review findings
+
+- Implementation mirrors existing video helper patterns (`_safe_name`, `resolve_source`, `save_upload` temp/rename).
+- `list_images` returns empty list when `images_dir` is missing (defensive, not required by tests but harmless).
+- Images and video sources remain in separate directories; no cross-listing.
+- No HTTP routes, `render_still`, or out-of-scope changes added.
+- Commit excludes `.superpowers/sdd/` and plan doc as instructed.
+
+## Issues or concerns
+
+- None blocking. Two ffmpeg-dependent upload tests skipped (no ffmpeg on PATH); pre-existing behavior.
+- `resolve_image` raises `ValueError` for bad extensions (via `_safe_image_name`) rather than a distinct error type; matches video helper behavior and satisfies tests.
+
+## Review fix: TOCTOU collision on concurrent save
+
+### What changed
+
+- Replaced `dest.exists()` + `temp.replace(dest)` with `_commit_image_upload()`, which uses `os.link(temp, dest)` to atomically place the temp file. `os.link` fails with `FileExistsError` if `dest` already exists, so concurrent same-name uploads never overwrite each other; losers retry with `{stem}-{8hex}{suffix}`.
+- Added `test_save_image_concurrent_same_name` — 8 threads save `"photo.jpg"` simultaneously; asserts 8 unique names, exactly one `photo.jpg`, and each file retains its payload.
+
+### Covering tests
+
+- `test_save_list_delete_image`
+- `test_save_image_unique_on_collision`
+- `test_save_image_concurrent_same_name` (new)
+- `test_save_image_rejects_oversize_and_unsafe`
+- `test_images_not_listed_as_video_sources`
+- `test_ensure_media_dirs`
+
+### Command and output
+
+```text
+python -m pytest tests/web/test_library.py tests/web/test_config.py::test_ensure_media_dirs -v
+```
+
+```
+======================== 11 passed, 2 skipped in 0.42s ========================
+```
+
+Commit: `fix(web): atomically reserve image dest on save`

@@ -1,200 +1,250 @@
-### Task 2: Jobs + API pitch/speed
+### Task 2: `render_still`
 
 **Files:**
-- Modify: `src/roblox_viral/web/jobs.py`
-- Modify: `src/roblox_viral/web/app.py`
-- Modify: `tests/web/test_jobs.py`
-- Modify: `tests/web/test_api.py`
+- Modify: `src/roblox_viral/render.py`
+- Modify: `tests/test_render.py`
 
 **Interfaces:**
-- Consumes: `format_edge_pitch`, `format_edge_rate`, `DEFAULT_PITCH`, `DEFAULT_SPEED`, `EdgeTTSProvider(..., rate=, pitch=)`
+- Consumes: `OUTPUT_WIDTH`, `OUTPUT_HEIGHT`, `probe_duration_seconds`, `_ass_filter_path`, `require_ffmpeg`
 - Produces:
-  - `JobRecord.pitch: int = DEFAULT_PITCH`
-  - `JobRecord.speed: int = DEFAULT_SPEED`
-  - `JobManager.create(..., voice, pitch: int = DEFAULT_PITCH, speed: int = DEFAULT_SPEED)`
-  - `CreateJobBody.pitch: int | None = None`, `speed: int | None = None`
-  - API uses defaults when null; validates via formatters (or explicit range check) before create
+  - `KEN_BURNS_ZOOM = 1.20`
+  - `KEN_BURNS_FPS = 30`
+  - `render_still(*, image_path, audio_path, ass_path, output_path, ken_burns: bool = False, work_dir=None) -> Path`
+  - No overlay argument
+  - Static vf: `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,ass='...'`
+  - Ken Burns: cover-scale to `1296x2304` (`1080*1.20` × `1920*1.20`), `zoompan` 1.0→1.20 over `max(1, round(duration * 30))` frames, `s=1080x1920`, then `ass`
 
-- [ ] **Step 1: Write failing API / job tests**
+- [ ] **Step 1: Write failing tests**
 
-Append to `tests/web/test_api.py` (reuse existing `_client` / login helpers already in that file):
-
-```python
-def test_create_job_accepts_pitch_and_speed(tmp_path, monkeypatch):
-    # same setup pattern as existing create-job success test:
-    # ensure a source file exists, login, POST with pitch/speed
-    ...
-    r = c.post(
-        "/api/jobs",
-        json={
-            "source_name": "clip.mp4",
-            "story": "Hi.\n",
-            "voice": "en-US-EmmaNeural",
-            "pitch": 15,
-            "speed": 130,
-        },
-    )
-    assert r.status_code == 200
-
-
-def test_create_job_rejects_bad_pitch(tmp_path, monkeypatch):
-    ...
-    r = c.post(
-        "/api/jobs",
-        json={
-            "source_name": "clip.mp4",
-            "story": "Hi.\n",
-            "voice": "en-US-EmmaNeural",
-            "pitch": 99,
-            "speed": 130,
-        },
-    )
-    assert r.status_code == 400
-```
-
-Mirror the fixture/setup from `test_create_job_starts` (or whichever existing success test) in the same file — copy its media/login/monkeypatch preamble exactly.
-
-In `tests/web/test_jobs.py`, add:
+Append to `tests/test_render.py`:
 
 ```python
-def test_run_job_passes_pitch_and_speed_to_tts(tmp_path, monkeypatch):
-    s = _settings(tmp_path, monkeypatch)
-    (s.sources_dir / "clip.mp4").write_bytes(b"x")
-    mgr = JobManager()
-    constructed = {}
+from roblox_viral.render import render_still
 
-    class FakeProvider:
-        def __init__(self, voice, *, rate="+0%", pitch="+0Hz"):
-            constructed["voice"] = voice
-            constructed["rate"] = rate
-            constructed["pitch"] = pitch
 
-        def synthesize(self, text, output_path):
-            Path(output_path).write_bytes(b"mp3")
-            return [WordTiming("One", 0, 100)]
+def test_render_still_static_loops_image_no_overlay(tmp_path, monkeypatch):
+    image = _touch(tmp_path / "still.jpg")
+    audio = _touch(tmp_path / "n.mp3")
+    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+    out = tmp_path / "out.mp4"
+    seen = {}
 
-    def fake_write_ass(words, ass_path, sentences=None):
-        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.5)
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
 
-    def fake_render_video(**kwargs):
-        Path(kwargs["output_path"]).write_bytes(b"mp4")
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        seen["cmd"] = cmd
+        out.write_bytes(b"mp4")
 
-    monkeypatch.setattr("roblox_viral.web.jobs.EdgeTTSProvider", FakeProvider)
-    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
-    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+        class R:
+            returncode = 0
+            stderr = ""
 
-    job = mgr.create(
-        s, "clip.mp4", "One line only here.\n", "en-US-EmmaNeural",
-        pitch=15, speed=130,
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+
+    render_still(
+        image_path=image,
+        audio_path=audio,
+        ass_path=ass,
+        output_path=out,
+        ken_burns=False,
     )
-    mgr.run_job(s, job.id)
-    assert constructed["rate"] == "+30%"
-    assert constructed["pitch"] == "+15Hz"
-    assert mgr.get(job.id, s).status == "done"
-```
+    cmd = seen["cmd"]
+    assert cmd.count("-i") == 2
+    assert "-loop" in cmd
+    assert cmd[cmd.index("-loop") + 1] == "1"
+    assert "-framerate" in cmd
+    assert str(image) in cmd
+    assert str(audio) in cmd
+    assert "-vf" in cmd
+    vf = cmd[cmd.index("-vf") + 1]
+    assert "scale=1080:1920:force_original_aspect_ratio=increase" in vf
+    assert "crop=1080:1920" in vf
+    assert "zoompan" not in vf
+    assert "-filter_complex" not in cmd
+    assert "chromakey" not in " ".join(cmd)
+    assert "0:v:0" in cmd
+    assert "1:a:0" in cmd
+    assert "-t" in cmd
 
-Adapt `_settings` / patterns to match existing helpers in that file.
+
+def test_render_still_ken_burns_uses_zoompan(tmp_path, monkeypatch):
+    image = _touch(tmp_path / "still.png")
+    audio = _touch(tmp_path / "n.mp3")
+    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+    out = tmp_path / "out.mp4"
+    seen = {}
+
+    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        seen["cmd"] = cmd
+        out.write_bytes(b"mp4")
+
+        class R:
+            returncode = 0
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+
+    render_still(
+        image_path=image,
+        audio_path=audio,
+        ass_path=ass,
+        output_path=out,
+        ken_burns=True,
+    )
+    cmd = seen["cmd"]
+    vf = cmd[cmd.index("-vf") + 1]
+    assert "zoompan" in vf
+    assert "1.20" in vf or "1.2" in vf
+    assert "s=1080x1920" in vf
+    assert "fps=30" in vf
+    assert "crop=1296:2304" in vf
+    assert cmd.count("-i") == 2
+
+
+def test_render_still_missing_image_raises(tmp_path, monkeypatch):
+    audio = _touch(tmp_path / "n.mp3")
+    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 1.0)
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+    with pytest.raises(RenderError, match="Image"):
+        render_still(
+            image_path=tmp_path / "missing.jpg",
+            audio_path=audio,
+            ass_path=ass,
+            output_path=tmp_path / "out.mp4",
+        )
+```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pytest tests/web/test_api.py tests/web/test_jobs.py -k "pitch or speed" -v`
+Run: `pytest tests/test_render.py -v`
 
-Expected: FAIL (missing params / fields)
+Expected: existing overlay tests PASS; new tests FAIL (`render_still` not defined).
 
-- [ ] **Step 3: Implement jobs + API**
+- [ ] **Step 3: Implement `render_still`**
 
-`JobRecord` — add fields with defaults:
-
-```python
-from roblox_viral.voice import (
-    DEFAULT_PITCH,
-    DEFAULT_SPEED,
-    EdgeTTSProvider,
-    format_edge_pitch,
-    format_edge_rate,
-)
-
-@dataclass
-class JobRecord:
-    ...
-    pitch: int = DEFAULT_PITCH
-    speed: int = DEFAULT_SPEED
-```
-
-`create` signature:
+Add constants and function in `src/roblox_viral/render.py` after the overlay constants:
 
 ```python
-def create(
-    self,
-    settings: Settings,
-    source_name: str,
-    story: str,
-    voice: str,
-    pitch: int = DEFAULT_PITCH,
-    speed: int = DEFAULT_SPEED,
-) -> JobRecord:
-    format_edge_pitch(pitch)  # validate
-    format_edge_rate(speed)
-    ...
-    record = JobRecord(..., pitch=pitch, speed=speed, ...)
+KEN_BURNS_ZOOM = 1.20
+KEN_BURNS_FPS = 30
 ```
 
-In `get()` when loading `status.json`, read:
+Add after `render_video`:
 
 ```python
-pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
-speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
+def render_still(
+    *,
+    image_path: Path | str,
+    audio_path: Path | str,
+    ass_path: Path | str,
+    output_path: Path | str,
+    ken_burns: bool = False,
+    work_dir: Path | str | None = None,
+) -> Path:
+    """Hold (or Ken-Burns zoom) an image for TTS duration; burn ASS; mux TTS. No overlay."""
+    ffmpeg = require_ffmpeg()
+    image = Path(image_path)
+    audio = Path(audio_path)
+    ass = Path(ass_path)
+    out = Path(output_path)
+
+    if not image.is_file():
+        raise RenderError(f"Image not found: {image}")
+    if not audio.is_file():
+        raise RenderError(f"Audio not found: {audio}")
+    if not ass.is_file():
+        raise RenderError(f"Captions not found: {ass}")
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if work_dir is not None:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+
+    audio_duration = probe_duration_seconds(audio)
+    ass_escaped = _ass_filter_path(ass)
+
+    if ken_burns:
+        cover_w = int(OUTPUT_WIDTH * KEN_BURNS_ZOOM)
+        cover_h = int(OUTPUT_HEIGHT * KEN_BURNS_ZOOM)
+        frames = max(1, round(audio_duration * KEN_BURNS_FPS))
+        zoom_delta = KEN_BURNS_ZOOM - 1.0
+        vf = (
+            f"scale={cover_w}:{cover_h}:force_original_aspect_ratio=increase,"
+            f"crop={cover_w}:{cover_h},"
+            f"zoompan=z='min(1+{zoom_delta}*on/{frames},{KEN_BURNS_ZOOM})':"
+            f"d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"s={OUTPUT_WIDTH}x{OUTPUT_HEIGHT}:fps={KEN_BURNS_FPS},"
+            f"ass='{ass_escaped}'"
+        )
+    else:
+        vf = (
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+            f"ass='{ass_escaped}'"
+        )
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-loop",
+        "1",
+        "-framerate",
+        str(KEN_BURNS_FPS),
+        "-i",
+        str(image),
+        "-i",
+        str(audio),
+        "-t",
+        f"{audio_duration:.3f}",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-vf",
+        vf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "18",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RenderError(
+            "ffmpeg render failed:\n"
+            + (result.stderr[-2000:] if result.stderr else "no stderr")
+        )
+    return out
 ```
 
-(wrap in try already present; bad types fall through to None return)
+- [ ] **Step 4: Run tests to verify they pass**
 
-In `run_job` synthesize call:
+Run: `pytest tests/test_render.py -v`
 
-```python
-words = EdgeTTSProvider(
-    record.voice,
-    rate=format_edge_rate(record.speed),
-    pitch=format_edge_pitch(record.pitch),
-).synthesize(join_for_tts(sentences), narration_path)
-```
-
-`CreateJobBody`:
-
-```python
-class CreateJobBody(BaseModel):
-    source_name: str = ""
-    story: str = ""
-    voice: str | None = None
-    pitch: int | None = None
-    speed: int | None = None
-```
-
-In `create_job` handler:
-
-```python
-from roblox_viral.voice import DEFAULT_PITCH, DEFAULT_SPEED, format_edge_pitch, format_edge_rate
-
-pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
-speed = DEFAULT_SPEED if body.speed is None else body.speed
-try:
-    format_edge_pitch(pitch)
-    format_edge_rate(speed)
-except ValueError as exc:
-    raise HTTPException(status_code=400, detail=str(exc)) from exc
-record = mgr.create(settings, source_name, story, voice, pitch=pitch, speed=speed)
-```
-
-- [ ] **Step 4: Run tests**
-
-Run: `pytest tests/web/test_api.py tests/web/test_jobs.py tests/test_voice.py -q`
-
-Expected: PASS (fix any call sites that need `pitch=`/`speed=` defaults — dataclass defaults should keep old `create(...)` calls working)
+Expected: PASS (including existing overlay tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/roblox_viral/web/jobs.py src/roblox_viral/web/app.py tests/web/test_jobs.py tests/web/test_api.py
-git commit -m "feat(web): pass pitch and speed through jobs API"
+git add src/roblox_viral/render.py tests/test_render.py
+git commit -m "feat: render still images to vertical storytime video"
 ```
 
 ---
