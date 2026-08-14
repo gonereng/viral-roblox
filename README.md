@@ -86,7 +86,17 @@ Optional env vars:
 | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
 | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
 | `YOUTUBE_COOKIES` | Optional path to a Netscape `cookies.txt` for YouTube imports (bot checks). If unset, `MEDIA_ROOT/youtube_cookies.txt` is used when present. |
+| `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
 | `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
+
+### n8n API
+
+Set `API_KEY` in `.env`. Then:
+
+1. `POST /api/v1/videos` with header `X-API-Key` and JSON
+   `{ "voice", "story", "type": "roblox"|"leni", "source_name" }` → `{ "id" }`
+2. Poll `GET /api/v1/videos/{id}` until `status` is `done` or `error`
+3. `GET /api/v1/videos/{id}/download` → MP4 (`409` while rendering)
 
 ### Docker
 

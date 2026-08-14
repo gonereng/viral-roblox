@@ -120,3 +120,78 @@ def test_create_busy_409(tmp_path, monkeypatch):
         },
     )
     assert r.status_code == 409
+
+
+def test_download_done_returns_mp4(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        (settings.outputs_dir / rec.output_name).write_bytes(b"fake-mp4-bytes")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    job_id = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        json={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+        },
+    ).json()["id"]
+    r = c.get(f"/api/v1/videos/{job_id}/download", headers=_headers())
+    assert r.status_code == 200
+    assert r.content == b"fake-mp4-bytes"
+    assert "video/mp4" in r.headers.get("content-type", "")
+
+
+def test_download_not_ready_409(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+
+    def fake_run(self, settings, job_id):
+        pass
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    mgr: JobManager = c.app.state.job_manager
+    rec = mgr.create(
+        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="roblox"
+    )
+    with mgr._lock:
+        mgr._active_id = None
+    r = c.get(f"/api/v1/videos/{rec.id}/download", headers=_headers())
+    assert r.status_code == 409
+
+
+def test_download_error_422(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    mgr: JobManager = c.app.state.job_manager
+    rec = mgr.create(
+        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="roblox"
+    )
+    rec.status = "error"
+    rec.error = "boom"
+    with mgr._lock:
+        mgr._active_id = None
+    r = c.get(f"/api/v1/videos/{rec.id}/download", headers=_headers())
+    assert r.status_code == 422
+
+
+def test_download_unknown_404(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.get(
+        "/api/v1/videos/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/download",
+        headers=_headers(),
+    )
+    assert r.status_code == 404

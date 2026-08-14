@@ -1,67 +1,34 @@
-# Task 3 Report: Picture-mode jobs
+# Task 3 Report: Download + compose + README for n8n video API
 
-## Status: DONE
+## Status
+**Complete**
 
-## Summary
+## Commits
+- `feat(web): n8n video download endpoint and docs` — download route, docker-compose `API_KEY`, README n8n section
 
-Wired `JobManager` for picture-mode jobs: `JobRecord` gains `mode` and `ken_burns`, `create()` validates mode and resolves image vs video source, `run_job()` branches to `render_still` (no overlay) or existing `render_video` + overlay. Six new tests in `tests/web/test_jobs.py`.
-
-## TDD Evidence
-
-### RED — tests added before implementation
-
-Appended six tests per brief. Ran:
-
+## Test summary
 ```
-python -m pytest tests/web/test_jobs.py -v -k "picture or ken_burns or unknown_mode or roblox_ignores"
+pytest tests/web/test_api_v1.py tests/web/test_api_key_auth.py tests/web/test_config.py -q
+16 passed in ~1s
 ```
 
-Result: **6 failed** — expected `TypeError: JobManager.create() got an unexpected keyword argument 'mode'` / `'ken_burns'`; `render_still` not imported in `jobs.py`.
+| Test | Result |
+|------|--------|
+| `test_download_done_returns_mp4` | PASS |
+| `test_download_not_ready_409` | PASS |
+| `test_download_error_422` | PASS |
+| `test_download_unknown_404` | PASS (32-hex nonexistent id only) |
+| Prior Task 1–2 tests | PASS |
 
-### GREEN — implementation added
+## TDD evidence
+- **RED:** `pytest -k download -v` → 3 failed (404 route missing), 1 passed (unknown id)
+- **GREEN:** same + full suite → 16/16 pass
 
-Updated `src/roblox_viral/web/jobs.py` per brief. Ran:
+## Implementation notes
+- `GET /api/v1/videos/{id}/download` → `FileResponse` with path traversal guard
+- Status codes: 200 done, 409 not ready, 422 error, 404 unknown/missing file
+- `docker-compose.yml`: `API_KEY: ${API_KEY:-}`
+- README: `API_KEY` env table row + n8n API workflow subsection
 
-```
-python -m pytest tests/web/test_jobs.py -v
-```
-
-Result: **14 passed**.
-
-### Full suite (pre-commit)
-
-```
-python -m pytest -v
-```
-
-Result: **94 passed, 2 skipped** in 4.99s.
-
-## Commit
-
-- `b536a1c` — feat(web): picture-mode jobs with optional Ken Burns
-- Files: `src/roblox_viral/web/jobs.py`, `tests/web/test_jobs.py` only
-
-## Self-Review
-
-| Requirement | Met |
-|---|---|
-| `JobRecord.mode: str = "roblox"` | Yes |
-| `JobRecord.ken_burns: bool = False` | Yes |
-| `create(..., mode, ken_burns)` | Yes |
-| Invalid mode → `ValueError` | Yes |
-| Picture → `resolve_image`; roblox → `resolve_source`, `ken_burns=False` | Yes |
-| `run_job`: picture → `render_still` without overlay | Yes |
-| `run_job`: roblox → `render_video` + overlay | Yes |
-| Hydrate `mode` / `ken_burns` from `status.json` | Yes |
-| Single-flight unchanged (picture blocks roblox) | Yes |
-| No HTTP routes or Generate UI | Yes |
-
-### Notes
-
-- Existing roblox job tests unchanged and green.
-- `asdict(record)` persists new fields to `status.json` automatically.
-
-## Files Changed
-
-- `src/roblox_viral/web/jobs.py` — mode/ken_burns fields, create validation, run_job branching
-- `tests/web/test_jobs.py` — +6 picture-mode tests
+## Concerns
+- None.

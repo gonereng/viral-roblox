@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from roblox_viral.voice import DEFAULT_PITCH, DEFAULT_SPEED
@@ -74,3 +76,29 @@ def get_video(
     if record is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return asdict(record)
+
+
+@router.get("/videos/{video_id}/download")
+def download_video(
+    video_id: str,
+    request: Request,
+    _: None = Depends(require_api_key),
+) -> FileResponse:
+    settings = request.app.state.settings
+    mgr: JobManager = request.app.state.job_manager
+    record = mgr.get(video_id, settings)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if record.status == "error":
+        raise HTTPException(
+            status_code=422, detail=record.error or "Render failed"
+        )
+    if record.status != "done" or not record.output_name:
+        raise HTTPException(status_code=409, detail="Video not ready")
+    safe = Path(record.output_name).name
+    if safe != record.output_name:
+        raise HTTPException(status_code=400, detail="Invalid output name")
+    path = (settings.outputs_dir / safe).resolve()
+    if not path.is_relative_to(settings.outputs_dir.resolve()) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Output file missing")
+    return FileResponse(path, media_type="video/mp4", filename=safe)
