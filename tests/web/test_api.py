@@ -295,6 +295,33 @@ def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
     assert 'selected' in r.text.lower() or "Emma" in r.text
 
 
+def test_generate_page_has_picture_tab_controls(tmp_path, monkeypatch):
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    settings = c.app.state.settings
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    (settings.images_dir / "still.jpg").write_bytes(b"img")
+    r = c.get("/")
+    assert r.status_code == 200
+    assert 'id="tab-roblox"' in r.text
+    assert 'id="tab-picture"' in r.text
+    assert 'id="image_name"' in r.text
+    assert "still.jpg" in r.text
+    assert 'id="ken_burns"' in r.text
+    assert 'id="image-file"' in r.text
+    assert 'id="image-delete-btn"' in r.text
+    # Ken Burns lives in the picture block, not the roblox source block
+    roblox_idx = r.text.index('id="roblox-source-block"')
+    picture_idx = r.text.index('id="picture-source-block"')
+    ken_idx = r.text.index('id="ken_burns"')
+    assert picture_idx < ken_idx
+    assert "ken_burns" not in r.text[roblox_idx:picture_idx]
+
+
 def test_image_upload_requires_auth(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     r = c.post(

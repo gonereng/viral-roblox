@@ -50,6 +50,8 @@ Options:
 
 Browser UI to upload gameplay clips or import a YouTube URL on **Library** (background job; best MP4 ≤1080p; split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI (and `yt-dlp`, installed with the package).
 
+On **Generate**, switch **Roblox** (gameplay clip from Library) or **Picture** (upload a still on that tab: jpg/png/webp). Picture videos use the same story, voice, pitch, and speed; optional **Ken Burns** slowly zooms in. The greenscreen overlay applies to Roblox videos only.
+
 ### Local run
 
 ```bash

@@ -2,21 +2,56 @@
 {% block title %}Generate — Roblox Viral{% endblock %}
 {% block content %}
   <h1>Generate</h1>
-  <p class="lede">Pick a source clip, paste a story (one sentence per line), choose a voice.</p>
+  <p class="lede">Pick a Roblox clip or a still image, paste a story (one sentence per line), choose a voice.</p>
 
   <form id="generate-form" class="generate-form">
-    <label>
-      Source video
-      <select id="source_name" name="source_name" required>
-        {% if not sources %}
-        <option value="" disabled selected>No sources — upload in Library</option>
-        {% else %}
-        {% for s in sources %}
-        <option value="{{ s.name }}">{{ s.name }}</option>
-        {% endfor %}
-        {% endif %}
-      </select>
-    </label>
+    <div class="mode-tabs" role="tablist">
+      <button type="button" role="tab" id="tab-roblox" data-mode="roblox" aria-selected="true">Roblox</button>
+      <button type="button" role="tab" id="tab-picture" data-mode="picture" aria-selected="false">Picture</button>
+    </div>
+
+    <div id="roblox-source-block">
+      <label>
+        Source video
+        <select id="source_name" name="source_name">
+          {% if not sources %}
+          <option value="" disabled selected>No sources — upload in Library</option>
+          {% else %}
+          {% for s in sources %}
+          <option value="{{ s.name }}">{{ s.name }}</option>
+          {% endfor %}
+          {% endif %}
+        </select>
+      </label>
+    </div>
+
+    <div id="picture-source-block" hidden>
+      <label>
+        Source image
+        <select id="image_name" name="image_name">
+          {% if not images %}
+          <option value="" disabled selected>No images — upload below</option>
+          {% else %}
+          {% for img in images %}
+          <option value="{{ img.name }}">{{ img.name }}</option>
+          {% endfor %}
+          {% endif %}
+        </select>
+      </label>
+      <div class="image-actions">
+        <label>
+          Upload image
+          <input id="image-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+        </label>
+        <button id="image-upload-btn" type="button">Upload</button>
+        <button id="image-delete-btn" type="button"{% if not images %} disabled{% endif %}>Delete</button>
+      </div>
+      <p id="image-error" class="error" hidden></p>
+      <label class="checkbox-field">
+        <input id="ken_burns" name="ken_burns" type="checkbox">
+        Ken Burns (slow zoom-in)
+      </label>
+    </div>
 
     <label>
       Story
@@ -60,17 +95,6 @@
     <video id="player" controls playsinline></video>
     <p><a id="download" href="#" download>Download MP4</a></p>
   </section>
-
-  {% if images %}
-  <section class="image-list">
-    <h2>Images</h2>
-    <ul>
-      {% for img in images %}
-      <li>{{ img.name }}</li>
-      {% endfor %}
-    </ul>
-  </section>
-  {% endif %}
 
   <section class="recent-outputs">
     <h2>Recent outputs</h2>
