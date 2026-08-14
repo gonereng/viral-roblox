@@ -61,6 +61,17 @@
     <p><a id="download" href="#" download>Download MP4</a></p>
   </section>
 
+  {% if images %}
+  <section class="image-list">
+    <h2>Images</h2>
+    <ul>
+      {% for img in images %}
+      <li>{{ img.name }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   <section class="recent-outputs">
     <h2>Recent outputs</h2>
     {% if recent_outputs %}

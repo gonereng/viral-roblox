@@ -145,25 +145,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> HTMLResponse:
         settings = request.app.state.settings
         sources = list_sources(settings)
-        images = list_images(settings)
         try:
             voices = await list_english_voices()
         except Exception:
             voices = [VoiceInfo(DEFAULT_VOICE, "en-US", "Female")]
-        html = templates.get_template("generate.html").render(
-            request=request,
-            sources=sources,
-            voices=voices,
-            default_voice=DEFAULT_VOICE,
-            recent_outputs=list_outputs(settings),
-            images=images,
+        return templates.TemplateResponse(
+            request,
+            "generate.html",
+            {
+                "sources": sources,
+                "voices": voices,
+                "default_voice": DEFAULT_VOICE,
+                "recent_outputs": list_outputs(settings),
+                "images": list_images(settings),
+            },
         )
-        if images:
-            marker = "".join(
-                f'<span hidden class="image-ssr">{img.name}</span>' for img in images
-            )
-            html = html.replace("</main>", f"{marker}</main>", 1)
-        return HTMLResponse(html)
 
     @app.get("/library", response_class=HTMLResponse)
     def library_page(
