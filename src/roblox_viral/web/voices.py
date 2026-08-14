@@ -29,6 +29,10 @@ async def _fetch_voices() -> list[dict]:
     return await edge_tts.list_voices()
 
 
+def _include_locale(locale: str) -> bool:
+    return locale.startswith("en") or locale.startswith("de")
+
+
 async def list_english_voices() -> list[VoiceInfo]:
     global _cache, _cache_time
     now = time.monotonic()
@@ -36,16 +40,16 @@ async def list_english_voices() -> list[VoiceInfo]:
         return _cache
 
     raw = await _fetch_voices()
-    english = [
+    listed = [
         VoiceInfo(
             short_name=v["ShortName"],
             locale=v["Locale"],
             gender=v["Gender"],
         )
         for v in raw
-        if v["Locale"].startswith("en")
+        if _include_locale(v["Locale"])
     ]
-    english.sort(key=lambda v: v.short_name)
-    _cache = english
+    listed.sort(key=lambda v: v.short_name)
+    _cache = listed
     _cache_time = now
     return _cache
