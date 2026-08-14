@@ -199,3 +199,111 @@ def test_get_missing_status_returns_none(tmp_path, monkeypatch):
     mgr = JobManager()
     missing = "a" * 32
     assert mgr.get(missing, s) is None
+
+
+def test_create_picture_job_resolves_image(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.images_dir / "still.jpg").write_bytes(b"img")
+    mgr = JobManager()
+    job = mgr.create(
+        s,
+        "still.jpg",
+        "Hello world.\n",
+        "en-US-EmmaNeural",
+        mode="picture",
+        ken_burns=True,
+    )
+    assert job.mode == "picture"
+    assert job.ken_burns is True
+    assert job.kind == "render"
+    assert job.source_name == "still.jpg"
+
+
+def test_create_picture_rejects_video_name(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    with pytest.raises((ValueError, FileNotFoundError)):
+        mgr.create(
+            s, "clip.mp4", "Hello world.\n", "en-US-EmmaNeural", mode="picture"
+        )
+
+
+def test_create_roblox_ignores_ken_burns(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    job = mgr.create(
+        s,
+        "clip.mp4",
+        "Hello world.\n",
+        "en-US-EmmaNeural",
+        ken_burns=True,
+    )
+    assert job.mode == "roblox"
+    assert job.ken_burns is False
+
+
+def test_create_rejects_unknown_mode(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    with pytest.raises(ValueError, match="mode"):
+        mgr.create(
+            s, "clip.mp4", "Hello world.\n", "en-US-EmmaNeural", mode="gif"
+        )
+
+
+def test_picture_job_blocks_second_of_either_mode(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.images_dir / "still.jpg").write_bytes(b"img")
+    mgr = JobManager()
+    mgr.create(
+        s, "still.jpg", "Hello world.\n", "en-US-EmmaNeural", mode="picture"
+    )
+    with pytest.raises(BusyError):
+        mgr.create(s, "clip.mp4", "Other.\n", "en-US-EmmaNeural")
+
+
+def test_run_picture_job_calls_render_still(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    s = _settings(tmp_path, monkeypatch)
+    (s.images_dir / "still.jpg").write_bytes(b"img")
+    mgr = JobManager()
+    seen = {}
+
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_still(**kwargs):
+        seen.update(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    def boom_video(**kwargs):
+        raise AssertionError("render_video should not run for picture jobs")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_still", fake_render_still)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", boom_video)
+
+    job = mgr.create(
+        s,
+        "still.jpg",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        mode="picture",
+        ken_burns=True,
+    )
+    mgr.run_job(s, job.id)
+    done = mgr.get(job.id, s)
+    assert done.status == "done"
+    assert done.output_name.endswith(".mp4")
+    assert "still" in done.output_name
+    assert seen["ken_burns"] is True
+    assert "overlay_path" not in seen
+    assert Path(seen["image_path"]).name == "still.jpg"

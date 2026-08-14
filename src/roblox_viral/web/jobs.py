@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from roblox_viral.captions import write_ass
-from roblox_viral.render import render_video
+from roblox_viral.render import render_still, render_video
 from roblox_viral.story import join_for_tts, split_sentences
 from roblox_viral.voice import (
     DEFAULT_PITCH,
@@ -21,6 +21,7 @@ from roblox_viral.voice import (
 from roblox_viral.web.config import Settings
 from roblox_viral.web.library import (
     make_output_name,
+    resolve_image,
     resolve_source,
     slice_into_minute_parts,
 )
@@ -61,6 +62,8 @@ class JobRecord:
     kind: str = "render"  # "render" | "youtube"
     pitch: int = DEFAULT_PITCH
     speed: int = DEFAULT_SPEED
+    mode: str = "roblox"  # "roblox" | "picture"
+    ken_burns: bool = False
     url: str | None = None
     stem: str | None = None
     created_slices: list[str] | None = None
@@ -83,10 +86,18 @@ class JobManager:
         voice: str,
         pitch: int = DEFAULT_PITCH,
         speed: int = DEFAULT_SPEED,
+        mode: str = "roblox",
+        ken_burns: bool = False,
     ) -> JobRecord:
         format_edge_pitch(pitch)
         format_edge_rate(speed)
-        resolve_source(settings, source_name)
+        if mode not in ("roblox", "picture"):
+            raise ValueError(f"Invalid mode: {mode!r}")
+        if mode == "picture":
+            resolve_image(settings, source_name)
+        else:
+            resolve_source(settings, source_name)
+            ken_burns = False
         sentences = split_sentences(story)
         if not sentences:
             raise ValueError("Story is empty")
@@ -106,6 +117,8 @@ class JobManager:
                 kind="render",
                 pitch=pitch,
                 speed=speed,
+                mode=mode,
+                ken_burns=ken_burns,
             )
             self._jobs[job_id] = record
             self._stories[job_id] = story
@@ -186,6 +199,8 @@ class JobManager:
                 kind=str(data.get("kind") or "render"),
                 pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
                 speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
+                mode=str(data.get("mode") or "roblox"),
+                ken_burns=bool(data.get("ken_burns", False)),
                 url=data.get("url"),
                 stem=data.get("stem"),
                 created_slices=data.get("created_slices"),
@@ -214,7 +229,6 @@ class JobManager:
             if not sentences:
                 raise ValueError("Story is empty")
 
-            video_path = resolve_source(settings, record.source_name)
             job_dir = settings.jobs_dir / job_id
             job_dir.mkdir(parents=True, exist_ok=True)
             narration_path = job_dir / "narration.mp3"
@@ -233,14 +247,26 @@ class JobManager:
             write_ass(words, ass_path, sentences=sentences)
 
             self._set_status(settings, record, "rendering")
-            render_video(
-                video_path=video_path,
-                audio_path=narration_path,
-                ass_path=ass_path,
-                output_path=output_path,
-                work_dir=job_dir,
-                overlay_path=settings.overlay_video_path,
-            )
+            if record.mode == "picture":
+                image_path = resolve_image(settings, record.source_name)
+                render_still(
+                    image_path=image_path,
+                    audio_path=narration_path,
+                    ass_path=ass_path,
+                    output_path=output_path,
+                    ken_burns=record.ken_burns,
+                    work_dir=job_dir,
+                )
+            else:
+                video_path = resolve_source(settings, record.source_name)
+                render_video(
+                    video_path=video_path,
+                    audio_path=narration_path,
+                    ass_path=ass_path,
+                    output_path=output_path,
+                    work_dir=job_dir,
+                    overlay_path=settings.overlay_video_path,
+                )
 
             record.output_name = output_name
             self._set_status(settings, record, "done")
