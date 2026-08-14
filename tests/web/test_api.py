@@ -293,3 +293,163 @@ def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
     assert "clip.mp4" in r.text
     assert "en-US-EmmaNeural" in r.text
     assert 'selected' in r.text.lower() or "Emma" in r.text
+
+
+def test_image_upload_requires_auth(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.post(
+        "/api/images",
+        files={"file": ("photo.jpg", b"xx", "image/jpeg")},
+    )
+    assert r.status_code == 401
+
+
+def test_image_upload_list_on_generate_and_delete(tmp_path, monkeypatch):
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    upload = c.post(
+        "/api/images",
+        files={"file": ("photo.jpg", b"jpeg-bytes", "image/jpeg")},
+    )
+    assert upload.status_code == 200
+    assert upload.json()["name"] == "photo.jpg"
+
+    page = c.get("/")
+    assert page.status_code == 200
+    assert "photo.jpg" in page.text
+
+    deleted = c.delete("/api/images/photo.jpg")
+    assert deleted.status_code == 200
+    assert "photo.jpg" not in c.get("/").text
+
+
+def test_image_upload_rejects_oversize_and_type(tmp_path, monkeypatch):
+    from roblox_viral.web import library
+
+    monkeypatch.setattr(library, "MAX_IMAGE_UPLOAD_BYTES", 100)
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    oversize = c.post(
+        "/api/images",
+        files={"file": ("photo.jpg", b"x" * 150, "image/jpeg")},
+    )
+    assert oversize.status_code == 400
+    bad = c.post(
+        "/api/images",
+        files={"file": ("clip.mp4", b"xx", "video/mp4")},
+    )
+    assert bad.status_code == 400
+    missing = c.delete("/api/images/nope.jpg")
+    assert missing.status_code == 404
+
+
+def test_create_picture_job(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    settings = c.app.state.settings
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    (settings.images_dir / "still.jpg").write_bytes(b"img")
+
+    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
+        record = self.get(job_id)
+        assert record is not None
+        record.output_name = f"{job_id}.mp4"
+        out = settings.outputs_dir / record.output_name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"fake-mp4")
+        record.status = "done"
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
+
+    r = c.post(
+        "/api/jobs",
+        json={
+            "mode": "picture",
+            "source_name": "still.jpg",
+            "story": "Hi there.\n",
+            "voice": "en-US-EmmaNeural",
+            "ken_burns": True,
+        },
+    )
+    assert r.status_code == 200
+    polled = c.get(f"/api/jobs/{r.json()['id']}")
+    assert polled.json()["mode"] == "picture"
+    assert polled.json()["ken_burns"] is True
+
+
+def test_create_job_mode_source_mismatch_400(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    _seed_source(c)
+    settings = c.app.state.settings
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    (settings.images_dir / "still.jpg").write_bytes(b"img")
+
+    roblox_with_image = c.post(
+        "/api/jobs",
+        json={
+            "mode": "roblox",
+            "source_name": "still.jpg",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+        },
+    )
+    assert roblox_with_image.status_code == 400
+
+    picture_with_video = c.post(
+        "/api/jobs",
+        json={
+            "mode": "picture",
+            "source_name": "clip.mp4",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+        },
+    )
+    assert picture_with_video.status_code == 400
+
+    unknown = c.post(
+        "/api/jobs",
+        json={
+            "mode": "gif",
+            "source_name": "clip.mp4",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+        },
+    )
+    assert unknown.status_code == 400
+
+
+def test_create_roblox_job_ignores_ken_burns(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    _seed_source(c)
+
+    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
+        record = self.get(job_id)
+        assert record is not None
+        record.status = "done"
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
+    r = c.post(
+        "/api/jobs",
+        json={
+            "source_name": "clip.mp4",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+            "ken_burns": True,
+        },
+    )
+    assert r.status_code == 200
+    data = c.get(f"/api/jobs/{r.json()['id']}").json()
+    assert data["mode"] == "roblox"
+    assert data["ken_burns"] is False

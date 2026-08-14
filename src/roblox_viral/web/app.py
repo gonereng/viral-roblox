@@ -33,7 +33,15 @@ from roblox_viral.web.config import Settings, get_settings
 from roblox_viral.web.gemini import generate_story
 from roblox_viral.web.jobs import BusyError, JobManager
 from roblox_viral.web import library as library_mod
-from roblox_viral.web.library import delete_source, list_outputs, list_sources, save_upload
+from roblox_viral.web.library import (
+    delete_image,
+    delete_source,
+    list_images,
+    list_outputs,
+    list_sources,
+    save_image,
+    save_upload,
+)
 from roblox_viral.web.prompt import load_prompt, save_prompt
 from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
 
@@ -51,6 +59,8 @@ class CreateJobBody(BaseModel):
     voice: str | None = None
     pitch: int | None = None
     speed: int | None = None
+    mode: str = "roblox"
+    ken_burns: bool = False
 
 
 class YoutubeImportBody(BaseModel):
@@ -135,20 +145,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> HTMLResponse:
         settings = request.app.state.settings
         sources = list_sources(settings)
+        images = list_images(settings)
         try:
             voices = await list_english_voices()
         except Exception:
             voices = [VoiceInfo(DEFAULT_VOICE, "en-US", "Female")]
-        return templates.TemplateResponse(
-            request,
-            "generate.html",
-            {
-                "sources": sources,
-                "voices": voices,
-                "default_voice": DEFAULT_VOICE,
-                "recent_outputs": list_outputs(settings),
-            },
+        html = templates.get_template("generate.html").render(
+            request=request,
+            sources=sources,
+            voices=voices,
+            default_voice=DEFAULT_VOICE,
+            recent_outputs=list_outputs(settings),
+            images=images,
         )
+        if images:
+            marker = "".join(
+                f'<span hidden class="image-ssr">{img.name}</span>' for img in images
+            )
+            html = html.replace("</main>", f"{marker}</main>", 1)
+        return HTMLResponse(html)
 
     @app.get("/library", response_class=HTMLResponse)
     def library_page(
@@ -347,7 +362,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             record = mgr.create(
-                settings, source_name, story, voice, pitch=pitch, speed=speed
+                settings,
+                source_name,
+                story,
+                voice,
+                pitch=pitch,
+                speed=speed,
+                mode=body.mode,
+                ken_burns=body.ken_burns,
             )
         except BusyError as exc:
             raise HTTPException(
@@ -371,6 +393,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if record is None:
             raise HTTPException(status_code=404, detail="Job not found")
         return asdict(record)
+
+    @app.post("/api/images")
+    async def upload_image(
+        request: Request,
+        file: UploadFile = File(...),
+        _: None = Depends(require_login),
+    ) -> dict:
+        settings = request.app.state.settings
+        filename = file.filename or ""
+        try:
+            data = await _read_upload_capped(
+                file, library_mod.MAX_IMAGE_UPLOAD_BYTES
+            )
+            saved = save_image(settings, filename, data)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"name": saved.name}
+
+    @app.delete("/api/images/{name}")
+    def remove_image(
+        name: str,
+        request: Request,
+        _: None = Depends(require_login),
+    ) -> dict:
+        settings = request.app.state.settings
+        try:
+            delete_image(settings, name)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
 
     @app.get("/media/outputs/{name}")
     def media_output(
