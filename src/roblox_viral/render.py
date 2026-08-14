@@ -16,6 +16,9 @@ OVERLAY_CHROMA_COLOR = "0x00FE00"
 OVERLAY_CHROMA_SIMILARITY = "0.30"
 OVERLAY_CHROMA_BLEND = "0.10"
 
+KEN_BURNS_ZOOM = 1.20
+KEN_BURNS_FPS = 30
+
 
 class RenderError(RuntimeError):
     """Raised when ffmpeg/ffprobe fails or is missing."""
@@ -210,4 +213,97 @@ def render_video(
             + (result.stderr[-2000:] if result.stderr else "no stderr")
         )
 
+    return out
+
+
+def render_still(
+    *,
+    image_path: Path | str,
+    audio_path: Path | str,
+    ass_path: Path | str,
+    output_path: Path | str,
+    ken_burns: bool = False,
+    work_dir: Path | str | None = None,
+) -> Path:
+    """Hold (or Ken-Burns zoom) an image for TTS duration; burn ASS; mux TTS. No overlay."""
+    ffmpeg = require_ffmpeg()
+    image = Path(image_path)
+    audio = Path(audio_path)
+    ass = Path(ass_path)
+    out = Path(output_path)
+
+    if not image.is_file():
+        raise RenderError(f"Image not found: {image}")
+    if not audio.is_file():
+        raise RenderError(f"Audio not found: {audio}")
+    if not ass.is_file():
+        raise RenderError(f"Captions not found: {ass}")
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if work_dir is not None:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+
+    audio_duration = probe_duration_seconds(audio)
+    ass_escaped = _ass_filter_path(ass)
+
+    if ken_burns:
+        cover_w = int(OUTPUT_WIDTH * KEN_BURNS_ZOOM)
+        cover_h = int(OUTPUT_HEIGHT * KEN_BURNS_ZOOM)
+        frames = max(1, round(audio_duration * KEN_BURNS_FPS))
+        zoom_delta = KEN_BURNS_ZOOM - 1.0
+        vf = (
+            f"scale={cover_w}:{cover_h}:force_original_aspect_ratio=increase,"
+            f"crop={cover_w}:{cover_h},"
+            f"zoompan=z='min(1+{zoom_delta}*on/{frames},{KEN_BURNS_ZOOM})':"
+            f"d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"s={OUTPUT_WIDTH}x{OUTPUT_HEIGHT}:fps={KEN_BURNS_FPS},"
+            f"ass='{ass_escaped}'"
+        )
+    else:
+        vf = (
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+            f"ass='{ass_escaped}'"
+        )
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-loop",
+        "1",
+        "-framerate",
+        str(KEN_BURNS_FPS),
+        "-i",
+        str(image),
+        "-i",
+        str(audio),
+        "-t",
+        f"{audio_duration:.3f}",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-vf",
+        vf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "18",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RenderError(
+            "ffmpeg render failed:\n"
+            + (result.stderr[-2000:] if result.stderr else "no stderr")
+        )
     return out
