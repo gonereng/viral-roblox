@@ -41,7 +41,7 @@ def test_create_roblox_video_returns_id(tmp_path, monkeypatch):
     r = c.post(
         "/api/v1/videos",
         headers=_headers(),
-        json={
+        data={
             "voice": "en-US-EmmaNeural",
             "story": "Hello world.\n",
             "type": "roblox",
@@ -76,7 +76,7 @@ def test_create_leni_maps_to_picture(tmp_path, monkeypatch):
     r = c.post(
         "/api/v1/videos",
         headers=_headers(),
-        json={
+        data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
             "type": "leni",
@@ -93,7 +93,7 @@ def test_create_bad_type_400(tmp_path, monkeypatch):
     r = c.post(
         "/api/v1/videos",
         headers=_headers(),
-        json={
+        data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
             "type": "other",
@@ -112,7 +112,7 @@ def test_create_busy_409(tmp_path, monkeypatch):
     r = c.post(
         "/api/v1/videos",
         headers=_headers(),
-        json={
+        data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
             "type": "roblox",
@@ -120,6 +120,112 @@ def test_create_busy_409(tmp_path, monkeypatch):
         },
     )
     assert r.status_code == 409
+
+
+def test_create_with_media_upload_roblox(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        assert rec.ephemeral is True
+        inp = settings.jobs_dir / job_id / rec.source_name
+        assert inp.is_file()
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+        },
+        files={"media": ("clip.mp4", b"fake-video", "video/mp4")},
+    )
+    assert r.status_code == 200
+    assert r.json()["id"]
+
+
+def test_create_with_media_upload_leni(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        assert rec.mode == "picture"
+        assert rec.ephemeral is True
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "leni",
+        },
+        files={"media": ("still.jpg", b"fake-img", "image/jpeg")},
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["mode"] == "picture"
+
+
+def test_create_rejects_both_media_and_source_name(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    (c.app.state.settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+        },
+        files={"media": ("clip.mp4", b"x", "video/mp4")},
+    )
+    assert r.status_code == 400
+
+
+def test_create_rejects_neither_media_nor_source(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_create_rejects_image_for_roblox(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+        },
+        files={"media": ("still.jpg", b"x", "image/jpeg")},
+    )
+    assert r.status_code == 400
 
 
 def test_download_done_returns_mp4(tmp_path, monkeypatch):
@@ -140,7 +246,7 @@ def test_download_done_returns_mp4(tmp_path, monkeypatch):
     job_id = c.post(
         "/api/v1/videos",
         headers=_headers(),
-        json={
+        data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
             "type": "roblox",

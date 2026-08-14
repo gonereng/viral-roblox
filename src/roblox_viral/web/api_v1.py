@@ -3,23 +3,25 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 
 from roblox_viral.voice import DEFAULT_PITCH, DEFAULT_SPEED
+from roblox_viral.web import library as library_mod
 from roblox_viral.web.auth import require_api_key
 from roblox_viral.web.jobs import BusyError, JobManager
 from roblox_viral.web.voices import DEFAULT_VOICE
 
 router = APIRouter(prefix="/api/v1", tags=["v1"])
-
-
-class CreateVideoBody(BaseModel):
-    voice: str = ""
-    story: str = ""
-    type: str = ""
-    source_name: str = ""
 
 
 def _mode_from_type(video_type: str) -> str:
@@ -35,31 +37,85 @@ def _mode_from_type(video_type: str) -> str:
 async def create_video(
     request: Request,
     background_tasks: BackgroundTasks,
-    body: CreateVideoBody,
     _: None = Depends(require_api_key),
+    voice: str = Form(""),
+    story: str = Form(""),
+    type: str = Form(""),
+    source_name: str = Form(""),
+    media: UploadFile | None = File(None),
 ) -> dict:
     settings = request.app.state.settings
     mgr: JobManager = request.app.state.job_manager
     try:
-        mode = _mode_from_type(body.type)
+        mode = _mode_from_type(type)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    voice = (body.voice or "").strip() or DEFAULT_VOICE
+
+    has_media = media is not None and bool(getattr(media, "filename", None))
+    name = (source_name or "").strip()
+    if has_media and name:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either media file or source_name, not both",
+        )
+    if not has_media and not name:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide media file or source_name",
+        )
+
+    voice_s = (voice or "").strip() or DEFAULT_VOICE
+    ephemeral = False
+    input_bytes: bytes | None = None
+    stored_name = name
+
+    if has_media:
+        assert media is not None
+        raw_name = Path(media.filename or "upload.bin").name
+        data = await media.read()
+        try:
+            if mode == "picture":
+                if len(data) > library_mod.MAX_IMAGE_UPLOAD_BYTES:
+                    raise ValueError(
+                        f"Upload exceeds maximum size of "
+                        f"{library_mod.MAX_IMAGE_UPLOAD_BYTES} bytes"
+                    )
+                stored_name = library_mod.validate_image_filename(raw_name)
+            else:
+                if len(data) > library_mod.MAX_UPLOAD_BYTES:
+                    raise ValueError(
+                        f"Upload exceeds maximum size of "
+                        f"{library_mod.MAX_UPLOAD_BYTES} bytes"
+                    )
+                stored_name = library_mod.validate_video_filename(raw_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        suffix = Path(stored_name).suffix.lower()
+        stored_name = f"input{suffix}"
+        ephemeral = True
+        input_bytes = data
+
     try:
         record = mgr.create(
             settings,
-            body.source_name,
-            body.story,
-            voice,
+            stored_name,
+            story,
+            voice_s,
             pitch=DEFAULT_PITCH,
             speed=DEFAULT_SPEED,
             mode=mode,
             ken_burns=False,
+            ephemeral=ephemeral,
         )
     except BusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if input_bytes is not None:
+        dest = settings.jobs_dir / record.id / record.source_name
+        dest.write_bytes(input_bytes)
+
     background_tasks.add_task(mgr.run_job, settings, record.id)
     return {"id": record.id}
 
