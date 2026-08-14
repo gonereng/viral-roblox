@@ -155,6 +155,23 @@ def test_save_image_unique_on_collision(tmp_path, monkeypatch):
     assert {first.name, second.name} == {i.name for i in library.list_images(s)}
 
 
+def test_save_image_concurrent_same_name(tmp_path, monkeypatch):
+    import concurrent.futures
+
+    s = _settings(tmp_path, monkeypatch)
+    payloads = [f"payload-{i}".encode() for i in range(8)]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda data: library.save_image(s, "photo.jpg", data), payloads))
+
+    names = {r.name for r in results}
+    assert len(names) == len(payloads)
+    assert sum(1 for n in names if n == "photo.jpg") == 1
+    for payload, saved in zip(payloads, results):
+        assert saved.path.read_bytes() == payload
+    assert len(library.list_images(s)) == len(payloads)
+
+
 def test_save_image_rejects_oversize_and_unsafe(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     monkeypatch.setattr(library, "MAX_IMAGE_UPLOAD_BYTES", 10)

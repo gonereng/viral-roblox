@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import uuid
@@ -50,6 +51,21 @@ def _safe_image_name(name: str) -> str:
     if base != name or not _SAFE_IMAGE_NAME.match(base):
         raise ValueError(f"Invalid image filename: {name!r}")
     return base
+
+
+def _commit_image_upload(temp: Path, images_dir: Path, safe: str) -> Path:
+    """Atomically place temp in images_dir; suffix on name collision."""
+    stem = Path(safe).stem
+    suffix = Path(safe).suffix.lower()
+    dest = images_dir / safe
+    while True:
+        try:
+            os.link(temp, dest)
+        except FileExistsError:
+            dest = images_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
+            continue
+        temp.unlink(missing_ok=True)
+        return dest
 
 
 def plan_full_minute_count(duration_seconds: float) -> int:
@@ -230,13 +246,10 @@ def save_image(settings: Settings, filename: str, data: bytes) -> SourceImage:
         )
     safe = _safe_image_name(filename)
     settings.images_dir.mkdir(parents=True, exist_ok=True)
-    dest = settings.images_dir / safe
-    if dest.exists():
-        dest = settings.images_dir / f"{Path(safe).stem}-{uuid.uuid4().hex[:8]}{Path(safe).suffix.lower()}"
     temp = settings.images_dir / f".upload-{uuid.uuid4().hex}{Path(safe).suffix.lower()}"
     try:
         temp.write_bytes(data)
-        temp.replace(dest)
+        dest = _commit_image_upload(temp, settings.images_dir, safe)
     except Exception:
         temp.unlink(missing_ok=True)
         raise
