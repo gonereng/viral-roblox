@@ -52,6 +52,14 @@ def _safe_image_name(name: str) -> str:
     return base
 
 
+def validate_video_filename(name: str) -> str:
+    return _safe_name(name)
+
+
+def validate_image_filename(name: str) -> str:
+    return _safe_image_name(name)
+
+
 def _commit_image_upload(images_dir: Path, safe: str, data: bytes) -> Path:
     """Exclusively create an image; suffix on name collision."""
     stem = Path(safe).stem

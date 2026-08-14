@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from roblox_viral.voice import WordTiming
 from roblox_viral.web.config import Settings
@@ -307,3 +309,55 @@ def test_run_picture_job_calls_render_still(tmp_path, monkeypatch):
     assert seen["ken_burns"] is True
     assert "overlay_path" not in seen
     assert Path(seen["image_path"]).name == "still.jpg"
+
+
+def test_create_ephemeral_skips_library(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    job = mgr.create(
+        s,
+        "input.mp4",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        mode="roblox",
+        ephemeral=True,
+    )
+    assert job.ephemeral is True
+    assert job.source_name == "input.mp4"
+
+
+def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    seen = {}
+
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        seen["video_path"] = Path(kwargs["video_path"])
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(
+        s,
+        "input.mp4",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        mode="roblox",
+        ephemeral=True,
+    )
+    input_path = s.jobs_dir / job.id / "input.mp4"
+    input_path.write_bytes(b"vid")
+    mgr.run_job(s, job.id)
+    assert mgr.get(job.id, s).status == "done"
+    assert seen["video_path"] == input_path.resolve()

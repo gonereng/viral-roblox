@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
+from pathlib import Path
+
 from roblox_viral.captions import write_ass
 from roblox_viral.render import render_still, render_video
 from roblox_viral.story import join_for_tts, split_sentences
@@ -24,6 +26,8 @@ from roblox_viral.web.library import (
     resolve_image,
     resolve_source,
     slice_into_minute_parts,
+    validate_image_filename,
+    validate_video_filename,
 )
 from roblox_viral.web.youtube import (
     download_youtube,
@@ -67,6 +71,7 @@ class JobRecord:
     url: str | None = None
     stem: str | None = None
     created_slices: list[str] | None = None
+    ephemeral: bool = False
 
 
 class JobManager:
@@ -88,12 +93,22 @@ class JobManager:
         speed: int = DEFAULT_SPEED,
         mode: str = "roblox",
         ken_burns: bool = False,
+        ephemeral: bool = False,
     ) -> JobRecord:
         format_edge_pitch(pitch)
         format_edge_rate(speed)
         if mode not in ("roblox", "picture"):
             raise ValueError(f"Invalid mode: {mode!r}")
-        if mode == "picture":
+        if ephemeral:
+            safe = Path(source_name).name
+            if safe != source_name or not safe:
+                raise ValueError("Invalid source_name")
+            if mode == "picture":
+                source_name = validate_image_filename(safe)
+            else:
+                source_name = validate_video_filename(safe)
+                ken_burns = False
+        elif mode == "picture":
             resolve_image(settings, source_name)
         else:
             resolve_source(settings, source_name)
@@ -119,6 +134,7 @@ class JobManager:
                 speed=speed,
                 mode=mode,
                 ken_burns=ken_burns,
+                ephemeral=ephemeral,
             )
             self._jobs[job_id] = record
             self._stories[job_id] = story
@@ -204,6 +220,7 @@ class JobManager:
                 url=data.get("url"),
                 stem=data.get("stem"),
                 created_slices=data.get("created_slices"),
+                ephemeral=bool(data.get("ephemeral", False)),
             )
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
@@ -247,10 +264,21 @@ class JobManager:
             write_ass(words, ass_path, sentences=sentences)
 
             self._set_status(settings, record, "rendering")
+            if record.ephemeral:
+                media_path = (job_dir / record.source_name).resolve()
+                if (
+                    not media_path.is_relative_to(job_dir.resolve())
+                    or not media_path.is_file()
+                ):
+                    raise FileNotFoundError(record.source_name)
+            elif record.mode == "picture":
+                media_path = resolve_image(settings, record.source_name)
+            else:
+                media_path = resolve_source(settings, record.source_name)
+
             if record.mode == "picture":
-                image_path = resolve_image(settings, record.source_name)
                 render_still(
-                    image_path=image_path,
+                    image_path=media_path,
                     audio_path=narration_path,
                     ass_path=ass_path,
                     output_path=output_path,
@@ -258,9 +286,8 @@ class JobManager:
                     work_dir=job_dir,
                 )
             else:
-                video_path = resolve_source(settings, record.source_name)
                 render_video(
-                    video_path=video_path,
+                    video_path=media_path,
                     audio_path=narration_path,
                     ass_path=ass_path,
                     output_path=output_path,
