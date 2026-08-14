@@ -22,3 +22,22 @@ python -m pytest -q
 ```
 
 **Result:** PASS
+
+## Picture Generation Addendum
+
+### Changes
+
+- Added `-pix_fmt yuv420p` to `render_still` so static and Ken Burns renders use browser-compatible chroma subsampling.
+- Asserted `ass=` and `yuv420p` in both `render_still` command tests.
+- Replaced hard-link-based image upload commits with exclusive `xb` file creation, collision retries, and partial-file cleanup on write failure.
+- Added a regression test proving image uploads do not require hard-link support.
+
+### Tests
+
+- `python -m pytest tests/test_render.py tests/web/test_library.py -v`
+  - `17 passed, 2 skipped in 0.34s`
+- `python -m pytest -v`
+  - `102 passed, 2 skipped, 1 warning in 5.38s`
+  - Warning: upstream Starlette deprecation warning from `fastapi.testclient`.
+
+`python -m pytest` was used because the standalone `pytest` command is not on this shell's `PATH`.

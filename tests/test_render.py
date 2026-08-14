@@ -149,7 +149,9 @@ def test_render_still_static_loops_image_no_overlay(tmp_path, monkeypatch):
     vf = cmd[cmd.index("-vf") + 1]
     assert "scale=1080:1920:force_original_aspect_ratio=increase" in vf
     assert "crop=1080:1920" in vf
+    assert "ass='" in vf
     assert "zoompan" not in vf
+    assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
     assert "-filter_complex" not in cmd
     assert "chromakey" not in " ".join(cmd)
     assert "0:v:0" in cmd
@@ -193,6 +195,8 @@ def test_render_still_ken_burns_uses_zoompan(tmp_path, monkeypatch):
     assert "s=1080x1920" in vf
     assert "fps=30" in vf
     assert "crop=1296:2304" in vf
+    assert "ass='" in vf
+    assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
     assert cmd.count("-i") == 2
 
 

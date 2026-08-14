@@ -287,6 +287,8 @@ def render_still(
         vf,
         "-c:v",
         "libx264",
+        "-pix_fmt",
+        "yuv420p",
         "-preset",
         "medium",
         "-crf",

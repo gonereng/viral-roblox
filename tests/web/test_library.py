@@ -155,6 +155,19 @@ def test_save_image_unique_on_collision(tmp_path, monkeypatch):
     assert {first.name, second.name} == {i.name for i in library.list_images(s)}
 
 
+def test_save_image_does_not_require_hard_links(tmp_path, monkeypatch):
+    import os
+
+    s = _settings(tmp_path, monkeypatch)
+
+    def unavailable_link(*_args, **_kwargs):
+        raise OSError("hard links unavailable")
+
+    monkeypatch.setattr(os, "link", unavailable_link)
+    saved = library.save_image(s, "photo.jpg", b"jpeg-bytes")
+    assert saved.path.read_bytes() == b"jpeg-bytes"
+
+
 def test_save_image_concurrent_same_name(tmp_path, monkeypatch):
     import concurrent.futures
 

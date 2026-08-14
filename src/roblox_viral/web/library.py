@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import uuid
@@ -53,18 +52,21 @@ def _safe_image_name(name: str) -> str:
     return base
 
 
-def _commit_image_upload(temp: Path, images_dir: Path, safe: str) -> Path:
-    """Atomically place temp in images_dir; suffix on name collision."""
+def _commit_image_upload(images_dir: Path, safe: str, data: bytes) -> Path:
+    """Exclusively create an image; suffix on name collision."""
     stem = Path(safe).stem
     suffix = Path(safe).suffix.lower()
     dest = images_dir / safe
     while True:
         try:
-            os.link(temp, dest)
+            with open(dest, "xb") as fh:
+                fh.write(data)
         except FileExistsError:
             dest = images_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
             continue
-        temp.unlink(missing_ok=True)
+        except BaseException:
+            dest.unlink(missing_ok=True)
+            raise
         return dest
 
 
@@ -246,13 +248,7 @@ def save_image(settings: Settings, filename: str, data: bytes) -> SourceImage:
         )
     safe = _safe_image_name(filename)
     settings.images_dir.mkdir(parents=True, exist_ok=True)
-    temp = settings.images_dir / f".upload-{uuid.uuid4().hex}{Path(safe).suffix.lower()}"
-    try:
-        temp.write_bytes(data)
-        dest = _commit_image_upload(temp, settings.images_dir, safe)
-    except Exception:
-        temp.unlink(missing_ok=True)
-        raise
+    dest = _commit_image_upload(settings.images_dir, safe, data)
     return SourceImage(dest.name, dest, dest.stat().st_size)
 
 
