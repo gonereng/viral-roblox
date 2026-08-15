@@ -205,3 +205,88 @@ def test_images_not_listed_as_video_sources(tmp_path, monkeypatch):
     (s.sources_dir / "clip.mp4").write_bytes(b"vid")
     assert [x.name for x in library.list_sources(s)] == ["clip.mp4"]
     assert [x.name for x in library.list_images(s)] == ["still.png"]
+
+
+def test_save_video_stores_as_is_no_slice(tmp_path, monkeypatch):
+    from roblox_viral.web.config import Settings
+    from roblox_viral.web import library as lib
+
+    media = tmp_path / "media"
+    s = Settings(
+        media_root=media,
+        app_password="x",
+        app_secret="dev-secret-key-at-least-32-chars!!",
+        require_password=False,
+        youtube_cookies="",
+    )
+    s.ensure_media_dirs()
+    called = {"slice": False}
+
+    def boom(*a, **k):
+        called["slice"] = True
+        raise AssertionError("slice must not run")
+
+    monkeypatch.setattr(lib, "slice_into_minute_parts", boom)
+    item = lib.save_video(s, "full.mp4", b"rawbytes")
+    assert item.name == "full.mp4"
+    assert (s.videos_dir / "full.mp4").read_bytes() == b"rawbytes"
+    assert called["slice"] is False
+    assert lib.list_videos(s)[0].name == "full.mp4"
+
+
+def test_resolve_roblox_media_sources_win(tmp_path):
+    from roblox_viral.web.config import Settings
+    from roblox_viral.web import library as lib
+
+    media = tmp_path / "media"
+    s = Settings(
+        media_root=media,
+        app_password="x",
+        app_secret="dev-secret-key-at-least-32-chars!!",
+        require_password=False,
+        youtube_cookies="",
+    )
+    s.ensure_media_dirs()
+    (s.sources_dir / "same.mp4").write_bytes(b"slice")
+    (s.videos_dir / "same.mp4").write_bytes(b"raw")
+    path = lib.resolve_roblox_media(s, "same.mp4")
+    assert path == (s.sources_dir / "same.mp4").resolve()
+
+
+def test_resolve_roblox_media_falls_back_to_videos(tmp_path):
+    from roblox_viral.web.config import Settings
+    from roblox_viral.web import library as lib
+
+    media = tmp_path / "media"
+    s = Settings(
+        media_root=media,
+        app_password="x",
+        app_secret="dev-secret-key-at-least-32-chars!!",
+        require_password=False,
+        youtube_cookies="",
+    )
+    s.ensure_media_dirs()
+    (s.videos_dir / "only.mp4").write_bytes(b"raw")
+    path = lib.resolve_roblox_media(s, "only.mp4")
+    assert path == (s.videos_dir / "only.mp4").resolve()
+
+
+def test_list_roblox_sources_labels_kinds(tmp_path):
+    from roblox_viral.web.config import Settings
+    from roblox_viral.web import library as lib
+
+    media = tmp_path / "media"
+    s = Settings(
+        media_root=media,
+        app_password="x",
+        app_secret="dev-secret-key-at-least-32-chars!!",
+        require_password=False,
+        youtube_cookies="",
+    )
+    s.ensure_media_dirs()
+    (s.sources_dir / "a-1.mp4").write_bytes(b"1")
+    (s.videos_dir / "b.mp4").write_bytes(b"2")
+    items = lib.list_roblox_sources(s)
+    kinds = {i.name: i.kind for i in items}
+    assert kinds["a-1.mp4"] == "slice"
+    assert kinds["b.mp4"] == "video"

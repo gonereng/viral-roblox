@@ -32,6 +32,14 @@ class SourceImage:
 
 
 @dataclass(frozen=True)
+class RobloxSource:
+    name: str
+    kind: str  # "slice" | "video"
+    path: Path
+    size_bytes: int
+
+
+@dataclass(frozen=True)
 class OutputVideo:
     name: str
     path: Path
@@ -78,6 +86,23 @@ def _commit_image_upload(images_dir: Path, safe: str, data: bytes) -> Path:
         return dest
 
 
+def _commit_video_upload(videos_dir: Path, safe: str, data: bytes) -> Path:
+    stem = Path(safe).stem
+    suffix = Path(safe).suffix.lower()
+    dest = videos_dir / safe
+    while True:
+        try:
+            with open(dest, "xb") as fh:
+                fh.write(data)
+        except FileExistsError:
+            dest = videos_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
+            continue
+        except BaseException:
+            dest.unlink(missing_ok=True)
+            raise
+        return dest
+
+
 def plan_full_minute_count(duration_seconds: float) -> int:
     """How many complete 1-minute slices to keep (tail under 60s discarded)."""
     if duration_seconds < 0:
@@ -108,6 +133,16 @@ def list_sources(settings: Settings) -> list[SourceVideo]:
     return items
 
 
+def list_videos(settings: Settings) -> list[SourceVideo]:
+    items: list[SourceVideo] = []
+    if not settings.videos_dir.is_dir():
+        return items
+    for path in sorted(settings.videos_dir.iterdir()):
+        if path.is_file() and _SAFE_NAME.match(path.name) and not path.name.startswith("."):
+            items.append(SourceVideo(path.name, path, path.stat().st_size))
+    return items
+
+
 def list_images(settings: Settings) -> list[SourceImage]:
     items: list[SourceImage] = []
     if not settings.images_dir.is_dir():
@@ -132,6 +167,16 @@ def resolve_source(settings: Settings, name: str) -> Path:
     safe = _safe_name(name)
     path = (settings.sources_dir / safe).resolve()
     if not path.is_relative_to(settings.sources_dir.resolve()):
+        raise ValueError("Invalid path")
+    if not path.is_file():
+        raise FileNotFoundError(safe)
+    return path
+
+
+def resolve_video(settings: Settings, name: str) -> Path:
+    safe = _safe_name(name)
+    path = (settings.videos_dir / safe).resolve()
+    if not path.is_relative_to(settings.videos_dir.resolve()):
         raise ValueError("Invalid path")
     if not path.is_file():
         raise FileNotFoundError(safe)
@@ -249,6 +294,17 @@ def save_upload(settings: Settings, filename: str, data: bytes) -> list[SourceVi
         temp.unlink(missing_ok=True)
 
 
+def save_video(settings: Settings, filename: str, data: bytes) -> SourceVideo:
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"Upload exceeds maximum size of {MAX_UPLOAD_BYTES} bytes"
+        )
+    safe = _safe_name(filename)
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    dest = _commit_video_upload(settings.videos_dir, safe, data)
+    return SourceVideo(dest.name, dest, dest.stat().st_size)
+
+
 def save_image(settings: Settings, filename: str, data: bytes) -> SourceImage:
     if len(data) > MAX_IMAGE_UPLOAD_BYTES:
         raise ValueError(
@@ -264,5 +320,25 @@ def delete_source(settings: Settings, name: str) -> None:
     resolve_source(settings, name).unlink()
 
 
+def delete_video(settings: Settings, name: str) -> None:
+    resolve_video(settings, name).unlink()
+
+
 def delete_image(settings: Settings, name: str) -> None:
     resolve_image(settings, name).unlink()
+
+
+def resolve_roblox_media(settings: Settings, name: str) -> Path:
+    try:
+        return resolve_source(settings, name)
+    except FileNotFoundError:
+        return resolve_video(settings, name)
+
+
+def list_roblox_sources(settings: Settings) -> list[RobloxSource]:
+    out: list[RobloxSource] = []
+    for s in list_sources(settings):
+        out.append(RobloxSource(s.name, "slice", s.path, s.size_bytes))
+    for v in list_videos(settings):
+        out.append(RobloxSource(v.name, "video", v.path, v.size_bytes))
+    return out
