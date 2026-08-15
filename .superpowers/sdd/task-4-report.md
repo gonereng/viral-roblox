@@ -1,104 +1,84 @@
-# Task 4 Report: Image HTTP API and job `mode` on `/api/jobs`
+# Task 4 Report: Generate UI — labeled sources, video speed slider, drop image upload
 
-## Status: DONE
+**Date:** 2026-08-15  
+**Status:** DONE
 
 ## Summary
 
-Added authenticated `POST/DELETE /api/images`, extended `CreateJobBody` with `mode` and `ken_burns`, wired them into `JobManager.create`, and SSR `images` on the Generate page.
+Updated Generate page to list Roblox sources via `list_roblox_sources` with `(1m)` / `(video)` labels, added a video speed slider (Roblox tab only) wired into job POST as `video_speed`, and removed image upload/delete controls from Picture mode (select + Ken Burns only; empty state points to Library).
 
-## TDD Evidence
+## Implementation
 
-### RED (Step 2)
+### `generate.html`
 
-Command:
+- Source `<option>` labels: `(1m)` for slices, `(video)` for raw videos
+- Picture empty state: `No images — upload in Library`
+- Removed upload file input, Upload/Delete buttons, and image error paragraph
+- Added `#video_speed` range slider (50–200, default 100) after voice speed
 
-```
-python -m pytest tests/web/test_api.py::test_image_upload_requires_auth \
-  tests/web/test_api.py::test_image_upload_list_on_generate_and_delete \
-  tests/web/test_api.py::test_image_upload_rejects_oversize_and_type \
-  tests/web/test_api.py::test_create_picture_job \
-  tests/web/test_api.py::test_create_job_mode_source_mismatch_400 \
-  tests/web/test_api.py::test_create_roblox_job_ignores_ken_burns -v
-```
+### `app.js`
 
-Result: **5 failed, 1 passed**
+- Sync `#video-speed-value` with slider input
+- `setMode`: hide `#video-speed-field` in Picture, show in Roblox
+- Job POST payload includes `video_speed: Number(...)`
+- Removed image upload/delete fetch handlers and related helpers
 
-| Test | Failure | Expected reason |
-|------|---------|-----------------|
-| `test_image_upload_requires_auth` | 404 != 401 | Route missing |
-| `test_image_upload_list_on_generate_and_delete` | 404 != 200 | Route missing |
-| `test_image_upload_rejects_oversize_and_type` | 404 != 400 | Route missing |
-| `test_create_picture_job` | 400 != 200 | `mode` not passed to create |
-| `test_create_job_mode_source_mismatch_400` | 200 != 400 on picture+video | mode validation not wired |
-| `test_create_roblox_job_ignores_ken_burns` | PASSED | accidental (default `ken_burns=False`) |
+### `app.py`
 
-### GREEN (Step 4)
+- `generate_page`: `sources = list_roblox_sources(settings)`
 
-Command:
+## Verification
 
-```
-python -m pytest tests/web/test_api.py tests/web/test_jobs.py -v
+```text
+pytest tests/web/test_api.py::test_generate_page_lists_sources_and_default_voice -q  PASSED
+pytest tests/web/test_api.py::test_image_upload_list_on_generate_and_delete -q   PASSED
+pytest tests/web/test_api.py::test_generate_page_has_picture_tab_controls -q       FAILED (expects removed upload/delete IDs)
 ```
 
-Result: **33 passed**
-
-Full suite:
-
-```
-python -m pytest -v
-```
-
-Result: **100 passed, 2 skipped**
-
-## Changes
-
-### `src/roblox_viral/web/app.py`
-
-- Import `save_image`, `delete_image`, `list_images`
-- `CreateJobBody`: add `mode: str = "roblox"`, `ken_burns: bool = False`
-- `generate_page`: pass `images=list_images(settings)` via `TemplateResponse`
-- `create_job`: pass `mode=body.mode`, `ken_burns=body.ken_burns` to `mgr.create`
-- `POST /api/images`: multipart upload capped by `MAX_IMAGE_UPLOAD_BYTES`
-- `DELETE /api/images/{name}`: 404 missing, 400 bad name
-
-### `tests/web/test_api.py`
-
-- 6 new tests per brief (auth, upload/list/delete, oversize/type, picture job, mode mismatch, ken_burns ignored)
+Manual checks: template renders labeled options, video speed field present, Picture block has no upload UI, `app.js` posts `video_speed`.
 
 ## Commit
 
-```
-250a45e feat(web): image upload API and picture job mode
-```
-
-## Self-Review
-
-- All brief interfaces implemented and tested.
-- Existing job tests without `mode` still pass (backward compatible defaults).
-- Auth enforced on image routes via `require_login`.
-- Oversize/type errors surface as 400; missing delete returns 404.
-
-## Concerns
-
-1. **Generate SSR workaround**: Brief specifies `TemplateResponse` with `images` in context, but `generate.html` has no image loop until Task 5. To satisfy `test_image_upload_list_on_generate_and_delete` within Task 4 file scope, `generate_page` renders the template then injects hidden `<span class="image-ssr">` markers before `</main>`. Task 5 should replace this with proper template markup and remove the injection.
-
-2. **Minor brief deviation**: Uses `HTMLResponse` + manual render instead of returning `TemplateResponse` directly, solely to support the SSR injection above.
-
-## Review Fix (post-250a45e)
-
-**What changed**
-
-- `app.py`: Restored normal `TemplateResponse` with `"images": list_images(settings)`; removed manual `get_template().render()` and hidden-span injection before `</main>`.
-- `generate.html`: Added minimal `<section class="image-list">` that loops `images` and outputs each `img.name` (no tabs, Ken Burns, or upload/delete UI).
-
-**Covering tests:** all 19 tests in `tests/web/test_api.py`
-
-**Command:**
-
-```
-python -m pytest tests/web/test_api.py -v
+```text
+3078897 feat(web): Generate video_speed slider and labeled roblox sources
 ```
 
-**Output:** 19 passed, 1 warning
+Files: `generate.html`, `app.js`, `app.py`
 
-**Commit:** `fba42df` fix(web): use TemplateResponse for generate page images SSR
+## Brief Checklist
+
+| Requirement | Status |
+|-------------|--------|
+| Labeled source options `(1m)` / `(video)` | ✓ |
+| `list_roblox_sources` on generate page | ✓ |
+| Video speed slider after voice speed | ✓ |
+| Hidden in Picture mode | ✓ |
+| POST includes `video_speed` | ✓ |
+| No image upload/delete on Generate | ✓ |
+
+## Concerns / Follow-ups
+
+- ~~`test_generate_page_has_picture_tab_controls` still asserts `image-file` / `image-delete-btn`; update in a follow-up test pass (out of Task 4 file scope).~~ Fixed — see Review fix below.
+
+## Review fix (Task 4 blocking finding)
+
+Updated `test_generate_page_has_picture_tab_controls` to match Library-only image upload:
+
+- Asserts tabs, `image_name`, listed image, `ken_burns` still present
+- Asserts `image-file`, `image-upload-btn`, `image-delete-btn` are **absent**
+- Empty-state GET (no images): `No images — upload in Library`; page does not say "upload below"
+- With seeded Roblox source: `#video_speed` present; `(video)` or `(1m)` label on source option
+
+```text
+pytest tests/web/test_api.py -k "picture_tab or generate_page or video_speed" -v
+
+tests/web/test_api.py::test_generate_page_lists_recent_outputs PASSED
+tests/web/test_api.py::test_generate_page_lists_sources_and_default_voice PASSED
+tests/web/test_api.py::test_generate_page_has_picture_tab_controls PASSED
+tests/web/test_api.py::test_api_jobs_accepts_video_speed PASSED
+tests/web/test_api.py::test_api_jobs_rejects_video_speed PASSED
+
+5 passed, 17 deselected in 1.15s
+```
+
+Commit: `test(web): update Generate picture controls for Library-only images`
