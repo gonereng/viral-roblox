@@ -278,6 +278,25 @@ def test_create_reddit_rejects_media(tmp_path, monkeypatch):
     assert r.status_code == 400
 
 
+def test_create_reddit_rejects_source_name(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "reddit",
+            "source_name": "clip.mp4",
+        },
+    )
+    assert r.status_code == 400
+
+
 def test_create_busy_409(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     settings = c.app.state.settings

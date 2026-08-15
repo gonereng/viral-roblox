@@ -106,7 +106,13 @@ def build_reddit_background(
             ]
         )
         label = f"v{index}"
-        filter_parts.append(f"[{index}:v]setpts=PTS-STARTPTS[{label}]")
+        filter_parts.append(
+            f"[{index}:v]"
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+            f"format=yuv420p,"
+            f"setpts=PTS-STARTPTS[{label}]"
+        )
         concat_inputs.append(f"[{label}]")
 
     filter_parts.append(

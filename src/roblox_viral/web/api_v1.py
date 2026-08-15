@@ -77,10 +77,10 @@ async def create_video(
     has_media = media is not None and bool(getattr(media, "filename", None))
     name = (source_name or "").strip()
     if mode == "reddit":
-        if has_media:
+        if has_media or name:
             raise HTTPException(
                 status_code=400,
-                detail="reddit type does not accept media",
+                detail="reddit type does not accept media or source_name",
             )
     elif has_media and name:
         raise HTTPException(

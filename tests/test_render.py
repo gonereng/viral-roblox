@@ -396,8 +396,12 @@ def test_build_reddit_background_concats_trimmed_segments(tmp_path, monkeypatch)
         "-i",
     ]
     filter_complex = cmd[cmd.index("-filter_complex") + 1]
-    assert "[0:v]setpts=PTS-STARTPTS[v0]" in filter_complex
-    assert "[1:v]setpts=PTS-STARTPTS[v1]" in filter_complex
+    normalize = (
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,format=yuv420p,setpts=PTS-STARTPTS"
+    )
+    assert f"[0:v]{normalize}[v0]" in filter_complex
+    assert f"[1:v]{normalize}[v1]" in filter_complex
     assert "[v0][v1]concat=n=2:v=1:a=0[outv]" in filter_complex
     assert cmd[cmd.index("-map") + 1] == "[outv]"
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
