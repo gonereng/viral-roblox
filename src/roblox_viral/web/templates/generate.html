@@ -1,16 +1,17 @@
 {% extends "base.html" %}
-{% block title %}Generate — Roblox Viral{% endblock %}
+{% block title %}Generate — Viral Studio{% endblock %}
 {% block content %}
   <h1>Generate</h1>
-  <p class="lede">Pick a Roblox clip or a still image, paste a story (one sentence per line), choose a voice.</p>
+  <p class="lede">Choose a background mode, paste a story (one sentence per line), and select a voice.</p>
 
-  <form id="generate-form" class="generate-form">
-    <div class="mode-tabs" role="tablist">
-      <button type="button" role="tab" id="tab-roblox" data-mode="roblox" aria-selected="true">Roblox</button>
-      <button type="button" role="tab" id="tab-picture" data-mode="picture" aria-selected="false">Picture</button>
+  <form id="generate-form" class="generate-form" data-has-videos="{{ 'true' if has_videos else 'false' }}">
+    <div class="mode-tabs" role="tablist" aria-label="Background mode">
+      <button type="button" role="tab" id="tab-single" data-mode="single" aria-controls="single-source-block" aria-selected="true" tabindex="0">Single background video</button>
+      <button type="button" role="tab" id="tab-picture" data-mode="picture" aria-controls="picture-source-block" aria-selected="false" tabindex="-1">Picture</button>
+      <button type="button" role="tab" id="tab-reddit" data-mode="reddit" aria-controls="reddit-source-block" aria-selected="false" tabindex="-1">Reddit</button>
     </div>
 
-    <div id="roblox-source-block">
+    <div id="single-source-block" role="tabpanel" aria-labelledby="tab-single">
       <label>
         Source video
         <select id="source_name" name="source_name">
@@ -18,14 +19,14 @@
           <option value="" disabled selected>No sources — upload in Library</option>
           {% else %}
           {% for s in sources %}
-          <option value="{{ s.name }}">{{ s.name }} {% if s.kind == "slice" %}(1m){% else %}(video){% endif %}</option>
+          <option value="{{ s.name }}">{{ s.name }} (1m)</option>
           {% endfor %}
           {% endif %}
         </select>
       </label>
     </div>
 
-    <div id="picture-source-block" hidden>
+    <div id="picture-source-block" role="tabpanel" aria-labelledby="tab-picture" hidden>
       <label>
         Source image
         <select id="image_name" name="image_name">
@@ -42,6 +43,10 @@
         <input id="ken_burns" name="ken_burns" type="checkbox">
         Ken Burns (slow zoom-in)
       </label>
+    </div>
+
+    <div id="reddit-source-block" role="tabpanel" aria-labelledby="tab-reddit" hidden>
+      <p>Uses random clips from Library → Videos</p>
     </div>
 
     <label>

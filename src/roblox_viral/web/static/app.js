@@ -69,14 +69,15 @@
   }
 
   const generateBtn = document.getElementById("generate-btn");
-  const tabRoblox = document.getElementById("tab-roblox");
-  const tabPicture = document.getElementById("tab-picture");
-  const robloxBlock = document.getElementById("roblox-source-block");
+  const modeTabs = [...form.querySelectorAll('[role="tab"][data-mode]')];
+  const singleBlock = document.getElementById("single-source-block");
   const pictureBlock = document.getElementById("picture-source-block");
+  const redditBlock = document.getElementById("reddit-source-block");
   const sourceSelect = document.getElementById("source_name");
   const imageSelect = document.getElementById("image_name");
   const kenBurnsEl = document.getElementById("ken_burns");
-  let currentMode = "roblox";
+  const hasVideos = form.dataset.hasVideos === "true";
+  let currentMode = "single";
   function imageSelectHasValue() {
     return Boolean(imageSelect && imageSelect.value);
   }
@@ -84,6 +85,8 @@
     if (!generateBtn) return;
     if (currentMode === "picture") {
       generateBtn.disabled = !imageSelectHasValue();
+    } else if (currentMode === "reddit") {
+      generateBtn.disabled = !hasVideos;
     } else {
       generateBtn.disabled = !(sourceSelect && sourceSelect.value);
     }
@@ -91,15 +94,36 @@
   function setMode(mode) {
     currentMode = mode;
     const isPicture = mode === "picture";
-    if (robloxBlock) robloxBlock.hidden = isPicture;
+    if (singleBlock) singleBlock.hidden = mode !== "single";
     if (pictureBlock) pictureBlock.hidden = !isPicture;
+    if (redditBlock) redditBlock.hidden = mode !== "reddit";
     if (videoSpeedField) videoSpeedField.hidden = isPicture;
-    if (tabRoblox) tabRoblox.setAttribute("aria-selected", isPicture ? "false" : "true");
-    if (tabPicture) tabPicture.setAttribute("aria-selected", isPicture ? "true" : "false");
+    for (const tab of modeTabs) {
+      const selected = tab.dataset.mode === mode;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
     syncGenerateEnabled();
   }
-  if (tabRoblox) tabRoblox.addEventListener("click", () => setMode("roblox"));
-  if (tabPicture) tabPicture.addEventListener("click", () => setMode("picture"));
+  for (const tab of modeTabs) {
+    tab.addEventListener("click", () => setMode(tab.dataset.mode));
+    tab.addEventListener("keydown", (event) => {
+      const currentIndex = modeTabs.indexOf(tab);
+      let nextIndex;
+      if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % modeTabs.length;
+      if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + modeTabs.length) % modeTabs.length;
+      if (event.key === "Home") nextIndex = 0;
+      if (event.key === "End") nextIndex = modeTabs.length - 1;
+      if (nextIndex === undefined) return;
+      event.preventDefault();
+      const nextTab = modeTabs[nextIndex];
+      setMode(nextTab.dataset.mode);
+      nextTab.focus();
+    });
+  }
+  if (sourceSelect) sourceSelect.addEventListener("change", syncGenerateEnabled);
+  if (imageSelect) imageSelect.addEventListener("change", syncGenerateEnabled);
+  syncGenerateEnabled();
 
   const statusEl = document.getElementById("status");
   const errorEl = document.getElementById("error");
@@ -180,7 +204,7 @@
     setStatus(job.status);
     if (job.status === "done") {
       stopPolling();
-      generateBtn.disabled = false;
+      syncGenerateEnabled();
       if (job.output_name) {
         showResult(job.output_name);
       }
@@ -188,7 +212,7 @@
     }
     if (job.status === "error") {
       stopPolling();
-      generateBtn.disabled = false;
+      syncGenerateEnabled();
       showError(job.error || "Render failed");
     }
   }
@@ -205,7 +229,9 @@
       source_name:
         currentMode === "picture"
           ? document.getElementById("image_name").value
-          : document.getElementById("source_name").value,
+          : currentMode === "single"
+            ? document.getElementById("source_name").value
+            : "",
       story: document.getElementById("story").value,
       voice: document.getElementById("voice").value,
       pitch: Number(document.getElementById("pitch").value),
@@ -230,13 +256,13 @@
       });
       const body = await res.json().catch(() => ({}));
       if (res.status === 409) {
-        generateBtn.disabled = false;
+        syncGenerateEnabled();
         setStatus("busy");
         showError(body.detail || "A job is already in progress");
         return;
       }
       if (!res.ok) {
-        generateBtn.disabled = false;
+        syncGenerateEnabled();
         setStatus("error");
         showError(body.detail || `Create failed (${res.status})`);
         return;
@@ -245,13 +271,13 @@
       pollTimer = setInterval(() => {
         pollJob(body.id).catch((err) => {
           stopPolling();
-          generateBtn.disabled = false;
+          syncGenerateEnabled();
           showError(err.message || String(err));
         });
       }, 1000);
       await pollJob(body.id);
     } catch (err) {
-      generateBtn.disabled = false;
+      syncGenerateEnabled();
       setStatus("error");
       showError(err.message || String(err));
     }

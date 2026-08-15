@@ -295,7 +295,7 @@ def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
     assert 'selected' in r.text.lower() or "Emma" in r.text
 
 
-def test_generate_page_has_picture_tab_controls(tmp_path, monkeypatch):
+def test_generate_page_has_three_mode_tab_controls(tmp_path, monkeypatch):
     async def fake_voices():
         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
 
@@ -314,20 +314,31 @@ def test_generate_page_has_picture_tab_controls(tmp_path, monkeypatch):
     (settings.images_dir / "still.jpg").write_bytes(b"img")
     r = c.get("/")
     assert r.status_code == 200
-    assert 'id="tab-roblox"' in r.text
+    assert 'id="tab-single"' in r.text
     assert 'id="tab-picture"' in r.text
+    assert 'id="tab-reddit"' in r.text
+    assert 'data-mode="single"' in r.text
+    assert 'data-mode="picture"' in r.text
+    assert 'data-mode="reddit"' in r.text
+    assert "Single background video" in r.text
+    assert "Uses random clips from Library → Videos" in r.text
+    assert 'id="tab-roblox"' not in r.text
+    assert 'data-mode="roblox"' not in r.text
+    assert ">Roblox</button>" not in r.text
     assert 'id="image_name"' in r.text
     assert "still.jpg" in r.text
     assert 'id="ken_burns"' in r.text
     assert 'id="image-file"' not in r.text
     assert 'id="image-upload-btn"' not in r.text
     assert 'id="image-delete-btn"' not in r.text
-    # Ken Burns lives in the picture block, not the roblox source block
-    roblox_idx = r.text.index('id="roblox-source-block"')
+    # Ken Burns lives in the picture block, not the single source block.
+    single_idx = r.text.index('id="single-source-block"')
     picture_idx = r.text.index('id="picture-source-block"')
+    reddit_idx = r.text.index('id="reddit-source-block"')
     ken_idx = r.text.index('id="ken_burns"')
     assert picture_idx < ken_idx
-    assert "ken_burns" not in r.text[roblox_idx:picture_idx]
+    assert "ken_burns" not in r.text[single_idx:picture_idx]
+    assert 'id="source_name"' not in r.text[reddit_idx:]
     assert 'id="video_speed"' in r.text
 
 
