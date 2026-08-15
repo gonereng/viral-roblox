@@ -34,7 +34,7 @@ from roblox_viral.web.api_v1 import router as api_v1_router
 from roblox_viral.web.auth import require_login, set_authenticated
 from roblox_viral.web.config import Settings, get_settings
 from roblox_viral.web.gemini import generate_story
-from roblox_viral.web.jobs import BusyError, JobManager
+from roblox_viral.web.jobs import BusyError, JobManager, normalize_mode
 from roblox_viral.web import library as library_mod
 from roblox_viral.web.library import (
     delete_image,
@@ -42,7 +42,6 @@ from roblox_viral.web.library import (
     delete_video,
     list_images,
     list_outputs,
-    list_roblox_sources,
     list_sources,
     list_videos,
     save_image,
@@ -84,7 +83,7 @@ class CreateJobBody(BaseModel):
     pitch: int | None = None
     speed: int | None = None
     video_speed: int | None = None
-    mode: str = "roblox"
+    mode: str = "single"
     ken_burns: bool = False
 
 
@@ -165,7 +164,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _: None = Depends(require_login),
     ) -> HTMLResponse:
         settings = request.app.state.settings
-        sources = list_roblox_sources(settings)
+        sources = list_sources(settings)
+        videos = list_videos(settings)
         try:
             voices = await list_english_voices()
         except Exception:
@@ -175,6 +175,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "generate.html",
             {
                 "sources": sources,
+                "videos": videos,
+                "has_videos": bool(videos),
                 "voices": voices,
                 "default_voice": DEFAULT_VOICE,
                 "recent_outputs": list_outputs(settings),
@@ -419,6 +421,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             format_edge_pitch(pitch)
             format_edge_rate(speed)
             validate_video_speed(video_speed)
+            mode = normalize_mode(body.mode)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
@@ -430,7 +433,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 pitch=pitch,
                 speed=speed,
                 video_speed=video_speed,
-                mode=body.mode,
+                mode=mode,
                 ken_burns=body.ken_burns,
             )
         except BusyError as exc:

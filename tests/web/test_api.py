@@ -329,7 +329,85 @@ def test_generate_page_has_picture_tab_controls(tmp_path, monkeypatch):
     assert picture_idx < ken_idx
     assert "ken_burns" not in r.text[roblox_idx:picture_idx]
     assert 'id="video_speed"' in r.text
-    assert "(video)" in r.text or "(1m)" in r.text
+
+
+def test_create_job_reddit_mode(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "clip.mp4").write_bytes(b"vid")
+
+    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
+        record = self.get(job_id)
+        assert record is not None
+        record.status = "done"
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
+
+    r = c.post(
+        "/api/jobs",
+        json={
+            "mode": "reddit",
+            "source_name": "",
+            "story": "Hi there.\n",
+            "voice": "en-US-EmmaNeural",
+        },
+    )
+    assert r.status_code == 200
+    polled = c.get(f"/api/jobs/{r.json()['id']}")
+    assert polled.json()["mode"] == "reddit"
+
+
+def test_create_job_maps_roblox_to_single(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    _seed_source(c)
+
+    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
+        record = self.get(job_id)
+        assert record is not None
+        record.status = "done"
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
+
+    r = c.post(
+        "/api/jobs",
+        json={
+            "mode": "roblox",
+            "source_name": "clip.mp4",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+        },
+    )
+    assert r.status_code == 200
+    polled = c.get(f"/api/jobs/{r.json()['id']}")
+    assert polled.json()["mode"] == "single"
+
+
+def test_generate_page_lists_slices_not_raw_videos(tmp_path, monkeypatch):
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    settings = c.app.state.settings
+    settings.sources_dir.mkdir(parents=True, exist_ok=True)
+    (settings.sources_dir / "slice-1.mp4").write_bytes(b"slice")
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "raw-only.mp4").write_bytes(b"raw")
+
+    r = c.get("/")
+    assert r.status_code == 200
+    assert "slice-1.mp4" in r.text
+    assert "raw-only.mp4" not in r.text
 
 
 def test_image_upload_requires_auth(tmp_path, monkeypatch):
