@@ -33,11 +33,15 @@ router = APIRouter(prefix="/api/v1", tags=["v1"])
 
 def _mode_from_type(video_type: str) -> str:
     t = (video_type or "").strip().lower()
-    if t == "roblox":
-        return "roblox"
+    if t == "single":
+        return "single"
+    if t == "reddit":
+        return "reddit"
     if t == "leni":
         return "picture"
-    raise ValueError("type must be 'roblox' or 'leni'")
+    if t == "roblox":
+        raise ValueError("type 'roblox' is removed; use 'single'")
+    raise ValueError("type must be 'single', 'reddit', or 'leni'")
 
 
 def _optional_int(raw: str | None, default: int, label: str) -> int:
@@ -72,12 +76,18 @@ async def create_video(
 
     has_media = media is not None and bool(getattr(media, "filename", None))
     name = (source_name or "").strip()
-    if has_media and name:
+    if mode == "reddit":
+        if has_media:
+            raise HTTPException(
+                status_code=400,
+                detail="reddit type does not accept media",
+            )
+    elif has_media and name:
         raise HTTPException(
             status_code=400,
             detail="Provide either media file or source_name, not both",
         )
-    if not has_media and not name:
+    elif not has_media and not name:
         raise HTTPException(
             status_code=400,
             detail="Provide media file or source_name",
@@ -98,7 +108,7 @@ async def create_video(
 
     ephemeral = False
     input_bytes: bytes | None = None
-    stored_name = name
+    stored_name = "" if mode == "reddit" else name
 
     if has_media:
         assert media is not None

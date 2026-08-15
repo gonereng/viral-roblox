@@ -7,7 +7,7 @@ $createJson = curl.exe -s -X POST "$base/api/v1/videos" `
   -H "X-API-Key: $apiKey" `
   -F "voice=en-US-EmmaNeural" `
   -F "story=Hello from n8n.`nThis is a test." `
-  -F "type=roblox" `
+  -F "type=single" `
   -F "pitch=15" `
   -F "speed=130" `
   -F "video_speed=100" `

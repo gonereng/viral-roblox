@@ -100,9 +100,10 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 
 **Create** — `POST /api/v1/videos` as `multipart/form-data`:
 
-- `voice`, `story`, `type` (`roblox`|`leni`)
+- `voice`, `story`, `type` (`single`|`reddit`|`leni`; `roblox` is rejected — use `single`)
 - optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50…200, default 100)
-- either file field `media` **or** text field `source_name` (Library clip or raw video name)
+- for `single` or `leni`: either file field `media` **or** text field `source_name` (Library clip or raw video/image name)
+- for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)
 
 Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`.
 
@@ -117,7 +118,7 @@ $create = curl.exe -s -X POST "$base/api/v1/videos" `
   -H "X-API-Key: $apiKey" `
   -F "voice=en-US-EmmaNeural" `
   -F "story=Hello from n8n.`nThis is a test." `
-  -F "type=roblox" `
+  -F "type=single" `
   -F "pitch=15" `
   -F "speed=130" `
   -F "video_speed=100" `
@@ -144,7 +145,7 @@ curl.exe -s -X POST "http://127.0.0.1:8000/api/v1/videos" `
   -H "X-API-Key: your-key" `
   -F "voice=en-US-EmmaNeural" `
   -F "story=Hello.`nWorld." `
-  -F "type=roblox" `
+  -F "type=single" `
   -F "source_name=gameplay-1.mp4"
 ```
 

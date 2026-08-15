@@ -44,7 +44,7 @@ def test_create_single_video_returns_id(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hello world.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
         },
     )
@@ -99,7 +99,7 @@ def test_create_accepts_optional_pitch_and_speed(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
             "pitch": "-20",
             "speed": "150",
@@ -122,7 +122,7 @@ def test_create_defaults_pitch_and_speed(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
         },
     )
@@ -144,7 +144,7 @@ def test_create_accepts_video_speed(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
             "video_speed": "160",
         },
@@ -165,7 +165,7 @@ def test_create_resolves_source_video(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "raw.mp4",
         },
     )
@@ -182,7 +182,7 @@ def test_create_invalid_video_speed_400(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
             "video_speed": "9",
         },
@@ -200,7 +200,7 @@ def test_create_invalid_pitch_400(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
             "pitch": "999",
         },
@@ -223,6 +223,61 @@ def test_create_bad_type_400(tmp_path, monkeypatch):
     assert r.status_code == 400
 
 
+def test_create_roblox_type_400(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    (c.app.state.settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+        },
+    )
+    assert r.status_code == 400
+    assert "single" in r.json()["detail"].lower()
+
+
+def test_create_reddit_with_story_voice_type(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "reddit",
+        },
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["mode"] == "reddit"
+
+
+def test_create_reddit_rejects_media(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "reddit",
+        },
+        files={"media": ("clip.mp4", b"x", "video/mp4")},
+    )
+    assert r.status_code == 400
+
+
 def test_create_busy_409(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     settings = c.app.state.settings
@@ -235,14 +290,14 @@ def test_create_busy_409(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
         },
     )
     assert r.status_code == 409
 
 
-def test_create_with_media_upload_roblox(tmp_path, monkeypatch):
+def test_create_with_media_upload_single(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
 
     def fake_run(self, settings, job_id):
@@ -264,7 +319,7 @@ def test_create_with_media_upload_roblox(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
         },
         files={"media": ("clip.mp4", b"fake-video", "video/mp4")},
     )
@@ -311,7 +366,7 @@ def test_create_rejects_both_media_and_source_name(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
         },
         files={"media": ("clip.mp4", b"x", "video/mp4")},
@@ -327,13 +382,13 @@ def test_create_rejects_neither_media_nor_source(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
         },
     )
     assert r.status_code == 400
 
 
-def test_create_rejects_image_for_roblox(tmp_path, monkeypatch):
+def test_create_rejects_image_for_single(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     r = c.post(
         "/api/v1/videos",
@@ -341,7 +396,7 @@ def test_create_rejects_image_for_roblox(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
         },
         files={"media": ("still.jpg", b"x", "image/jpeg")},
     )
@@ -369,7 +424,7 @@ def test_download_done_returns_mp4(tmp_path, monkeypatch):
         data={
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
-            "type": "roblox",
+            "type": "single",
             "source_name": "clip.mp4",
         },
     ).json()["id"]
