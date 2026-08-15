@@ -28,6 +28,19 @@ DEFAULT_SPEED = 130
 PITCH_MIN, PITCH_MAX = -100, 100
 SPEED_MIN, SPEED_MAX = 50, 200
 
+DEFAULT_VIDEO_SPEED = 100
+VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = 50, 200
+
+
+def validate_video_speed(percent: int) -> int:
+    if not isinstance(percent, int) or isinstance(percent, bool):
+        raise ValueError("video_speed must be an int")
+    if percent < VIDEO_SPEED_MIN or percent > VIDEO_SPEED_MAX:
+        raise ValueError(
+            f"video_speed must be between {VIDEO_SPEED_MIN} and {VIDEO_SPEED_MAX}"
+        )
+    return percent
+
 
 def format_edge_pitch(pitch: int) -> str:
     if not isinstance(pitch, int) or isinstance(pitch, bool):

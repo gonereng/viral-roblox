@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from roblox_viral.voice import validate_video_speed
+
 
 OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
@@ -75,6 +77,13 @@ def _ass_filter_path(ass_path: Path) -> str:
     return p
 
 
+def _playback_setpts(video_speed: int) -> str | None:
+    validate_video_speed(video_speed)
+    if video_speed == 100:
+        return None
+    return f"setpts=100/{video_speed}*PTS"
+
+
 def render_video(
     *,
     video_path: Path | str,
@@ -84,6 +93,7 @@ def render_video(
     keep_temp: bool = False,
     work_dir: Path | str | None = None,
     overlay_path: Path | str | None = None,
+    video_speed: int = 100,
 ) -> Path:
     """
     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
@@ -121,13 +131,17 @@ def render_video(
 
     audio_duration = probe_duration_seconds(audio)
     ass_escaped = _ass_filter_path(ass)
+    setpts = _playback_setpts(video_speed)
 
     if overlay is None:
-        vf = (
-            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
-            f"ass='{ass_escaped}'"
-        )
+        parts = [
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+        ]
+        if setpts:
+            parts.append(setpts)
+        parts.append(f"ass='{ass_escaped}'")
+        vf = ",".join(parts)
         cmd = [
             ffmpeg,
             "-y",
@@ -161,9 +175,15 @@ def render_video(
             str(out),
         ]
     else:
+        base_parts = [
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+        ]
+        if setpts:
+            base_parts.append(setpts)
+        base = ",".join(base_parts)
         fc = (
-            f"[0:v]scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}[base];"
+            f"[0:v]{base}[base];"
             f"[base]ass='{ass_escaped}'[cap];"
             f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
             f"format=yuva420p,scale=-2:{OVERLAY_HEIGHT}[ov];"

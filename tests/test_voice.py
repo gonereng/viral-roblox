@@ -3,9 +3,13 @@ import pytest
 from roblox_viral.voice import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
+    DEFAULT_VIDEO_SPEED,
     EdgeTTSProvider,
+    VIDEO_SPEED_MAX,
+    VIDEO_SPEED_MIN,
     format_edge_pitch,
     format_edge_rate,
+    validate_video_speed,
 )
 
 
@@ -67,3 +71,19 @@ def test_edge_tts_provider_passes_rate_and_pitch(tmp_path, monkeypatch):
     assert seen["pitch"] == "+15Hz"
     assert seen["boundary"] == "WordBoundary"
     assert out.is_file()
+
+
+def test_validate_video_speed_ok():
+    assert DEFAULT_VIDEO_SPEED == 100
+    assert validate_video_speed(100) == 100
+    assert validate_video_speed(50) == 50
+    assert validate_video_speed(200) == 200
+
+
+def test_validate_video_speed_rejects():
+    with pytest.raises(ValueError):
+        validate_video_speed(49)
+    with pytest.raises(ValueError):
+        validate_video_speed(201)
+    with pytest.raises(ValueError):
+        validate_video_speed(True)  # type: ignore[arg-type]
