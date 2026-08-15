@@ -10,6 +10,7 @@ $createJson = curl.exe -s -X POST "$base/api/v1/videos" `
   -F "type=roblox" `
   -F "pitch=15" `
   -F "speed=130" `
+  -F "video_speed=100" `
   -F "media=@$video"
 
 Write-Host "create: $createJson"

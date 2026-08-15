@@ -18,8 +18,10 @@ from fastapi.responses import FileResponse
 from roblox_viral.voice import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
+    DEFAULT_VIDEO_SPEED,
     format_edge_pitch,
     format_edge_rate,
+    validate_video_speed,
 )
 from roblox_viral.web import library as library_mod
 from roblox_viral.web.auth import require_api_key
@@ -58,6 +60,7 @@ async def create_video(
     source_name: str = Form(""),
     pitch: str = Form(""),
     speed: str = Form(""),
+    video_speed: str = Form(""),
     media: UploadFile | None = File(None),
 ) -> dict:
     settings = request.app.state.settings
@@ -84,8 +87,12 @@ async def create_video(
     try:
         pitch_i = _optional_int(pitch, DEFAULT_PITCH, "pitch")
         speed_i = _optional_int(speed, DEFAULT_SPEED, "speed")
+        video_speed_i = _optional_int(
+            video_speed, DEFAULT_VIDEO_SPEED, "video_speed"
+        )
         format_edge_pitch(pitch_i)
         format_edge_rate(speed_i)
+        validate_video_speed(video_speed_i)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -127,6 +134,7 @@ async def create_video(
             voice_s,
             pitch=pitch_i,
             speed=speed_i,
+            video_speed=video_speed_i,
             mode=mode,
             ken_burns=False,
             ephemeral=ephemeral,

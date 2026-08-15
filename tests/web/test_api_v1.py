@@ -132,6 +132,64 @@ def test_create_defaults_pitch_and_speed(tmp_path, monkeypatch):
     assert st.json()["speed"] == 130
 
 
+def test_create_accepts_video_speed(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+            "video_speed": "160",
+        },
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["video_speed"] == 160
+
+
+def test_create_resolves_raw_library_video(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "raw.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "raw.mp4",
+        },
+    )
+    assert r.status_code == 200
+
+
+def test_create_invalid_video_speed_400(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+            "video_speed": "9",
+        },
+    )
+    assert r.status_code == 400
+
+
 def test_create_invalid_pitch_400(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     settings = c.app.state.settings
