@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 
 import pytest
 from roblox_viral.voice import WordTiming
+from roblox_viral.web import jobs as jobs_module
 from roblox_viral.web.config import Settings
 from roblox_viral.web.jobs import BusyError, JobManager
 
@@ -230,7 +232,7 @@ def test_create_picture_rejects_video_name(tmp_path, monkeypatch):
         )
 
 
-def test_create_roblox_ignores_ken_burns(tmp_path, monkeypatch):
+def test_create_single_ignores_ken_burns(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     mgr = JobManager()
     job = mgr.create(
@@ -240,7 +242,7 @@ def test_create_roblox_ignores_ken_burns(tmp_path, monkeypatch):
         "en-US-EmmaNeural",
         ken_burns=True,
     )
-    assert job.mode == "roblox"
+    assert job.mode == "single"
     assert job.ken_burns is False
 
 
@@ -319,7 +321,7 @@ def test_create_ephemeral_skips_library(tmp_path, monkeypatch):
         "input.mp4",
         "One line only here.\n",
         "en-US-EmmaNeural",
-        mode="roblox",
+        mode="single",
         ephemeral=True,
     )
     assert job.ephemeral is True
@@ -353,7 +355,7 @@ def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
         "input.mp4",
         "One line only here.\n",
         "en-US-EmmaNeural",
-        mode="roblox",
+        mode="single",
         ephemeral=True,
     )
     input_path = s.jobs_dir / job.id / "input.mp4"
@@ -365,7 +367,7 @@ def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
 
 def test_create_job_persists_video_speed(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
-    (s.videos_dir / "raw-only.mp4").write_bytes(b"vid")
+    (s.sources_dir / "raw-only.mp4").write_bytes(b"vid")
     mgr = JobManager()
     record = mgr.create(
         s,
@@ -430,4 +432,113 @@ def test_run_job_passes_video_speed_to_render(tmp_path, monkeypatch):
     )
     mgr.run_job(s, job.id)
     assert seen["video_speed"] == 175
+    assert mgr.get(job.id, s).status == "done"
+
+
+def test_normalize_mode_maps_roblox_to_single():
+    assert hasattr(jobs_module, "normalize_mode")
+    assert jobs_module.normalize_mode("roblox") == "single"
+    assert jobs_module.normalize_mode("single") == "single"
+    assert jobs_module.normalize_mode("picture") == "picture"
+    assert jobs_module.normalize_mode("reddit") == "reddit"
+    with pytest.raises(ValueError, match="mode"):
+        jobs_module.normalize_mode("gif")
+
+
+def test_create_single_rejects_missing_source(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    with pytest.raises((ValueError, FileNotFoundError)):
+        mgr.create(s, "", "Hello world.\n", "en-US-EmmaNeural", mode="single")
+
+
+def test_create_reddit_requires_videos_pool(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    with pytest.raises(ValueError, match="video"):
+        mgr.create(s, "", "Hello world.\n", "en-US-EmmaNeural", mode="reddit")
+
+
+def test_create_reddit_ok_with_videos(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "background.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    job = mgr.create(s, "", "Hello world.\n", "en-US-EmmaNeural", mode="reddit")
+    assert job.mode == "reddit"
+    assert job.source_name in ("", "reddit")
+    assert job.ken_burns is False
+
+
+def test_hydrate_roblox_mode_as_single(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    job = mgr.create(
+        s, "clip.mp4", "Hello world.\n", "en-US-EmmaNeural", mode="single"
+    )
+    status_path = s.jobs_dir / job.id / "status.json"
+    data = json.loads(status_path.read_text(encoding="utf-8"))
+    data["mode"] = "roblox"
+    status_path.write_text(json.dumps(data), encoding="utf-8")
+
+    hydrated = JobManager().get(job.id, s)
+    assert hydrated is not None
+    assert hydrated.mode == "single"
+
+
+def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    videos = [s.videos_dir / "one.mp4", s.videos_dir / "two.mp4"]
+    for video in videos:
+        video.write_bytes(b"vid")
+    mgr = JobManager()
+    seen = {}
+
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_probe(path):
+        path = Path(path)
+        return 12.0 if path.name == "narration.mp3" else 8.0
+
+    def fake_plan(paths, target_seconds, *, durations):
+        seen["plan"] = (paths, target_seconds, durations)
+        return ["planned-segment"]
+
+    def fake_build(segments, output_path, *, work_dir=None):
+        seen["build"] = (segments, Path(output_path), Path(work_dir))
+        Path(output_path).write_bytes(b"background")
+
+    def fake_render_video(**kwargs):
+        seen["render"] = kwargs
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr(
+        jobs_module, "probe_duration_seconds", fake_probe, raising=False
+    )
+    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
+    monkeypatch.setattr(
+        jobs_module, "build_reddit_background", fake_build, raising=False
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
+    mgr.run_job(s, job.id)
+
+    reddit_bg = s.jobs_dir / job.id / "reddit_bg.mp4"
+    paths, target_seconds, durations = seen["plan"]
+    assert paths == videos
+    assert target_seconds == 12.0
+    assert durations == {videos[0]: 8.0, videos[1]: 8.0}
+    assert seen["build"] == (["planned-segment"], reddit_bg, s.jobs_dir / job.id)
+    assert seen["render"]["video_path"] == reddit_bg
+    assert seen["render"]["overlay_path"] == s.overlay_video_path
+    assert seen["render"]["video_speed"] == job.video_speed
     assert mgr.get(job.id, s).status == "done"

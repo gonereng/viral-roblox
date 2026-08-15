@@ -429,16 +429,16 @@ def test_create_job_mode_source_mismatch_400(tmp_path, monkeypatch):
     settings.images_dir.mkdir(parents=True, exist_ok=True)
     (settings.images_dir / "still.jpg").write_bytes(b"img")
 
-    roblox_with_image = c.post(
+    single_with_image = c.post(
         "/api/jobs",
         json={
-            "mode": "roblox",
+            "mode": "single",
             "source_name": "still.jpg",
             "story": "Hi.\n",
             "voice": "en-US-EmmaNeural",
         },
     )
-    assert roblox_with_image.status_code == 400
+    assert single_with_image.status_code == 400
 
     picture_with_video = c.post(
         "/api/jobs",
@@ -463,7 +463,7 @@ def test_create_job_mode_source_mismatch_400(tmp_path, monkeypatch):
     assert unknown.status_code == 400
 
 
-def test_create_roblox_job_ignores_ken_burns(tmp_path, monkeypatch):
+def test_create_single_job_ignores_ken_burns(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     _login(c)
     _seed_source(c)
@@ -488,7 +488,7 @@ def test_create_roblox_job_ignores_ken_burns(tmp_path, monkeypatch):
     )
     assert r.status_code == 200
     data = c.get(f"/api/jobs/{r.json()['id']}").json()
-    assert data["mode"] == "roblox"
+    assert data["mode"] == "single"
     assert data["ken_burns"] is False
 
 

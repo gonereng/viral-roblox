@@ -21,7 +21,7 @@ def _headers():
     return {"X-API-Key": API_KEY}
 
 
-def test_create_roblox_video_returns_id(tmp_path, monkeypatch):
+def test_create_single_video_returns_id(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     settings = c.app.state.settings
     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
@@ -54,7 +54,7 @@ def test_create_roblox_video_returns_id(tmp_path, monkeypatch):
     st = c.get(f"/api/v1/videos/{job_id}", headers=_headers())
     assert st.status_code == 200
     assert st.json()["status"] == "done"
-    assert st.json()["mode"] == "roblox"
+    assert st.json()["mode"] == "single"
 
 
 def test_create_leni_maps_to_picture(tmp_path, monkeypatch):
@@ -154,11 +154,10 @@ def test_create_accepts_video_speed(tmp_path, monkeypatch):
     assert st.json()["video_speed"] == 160
 
 
-def test_create_resolves_raw_library_video(tmp_path, monkeypatch):
+def test_create_resolves_source_video(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     settings = c.app.state.settings
-    settings.videos_dir.mkdir(parents=True, exist_ok=True)
-    (settings.videos_dir / "raw.mp4").write_bytes(b"vid")
+    (settings.sources_dir / "raw.mp4").write_bytes(b"vid")
     monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
     r = c.post(
         "/api/v1/videos",
@@ -391,7 +390,7 @@ def test_download_not_ready_409(tmp_path, monkeypatch):
     monkeypatch.setattr(JobManager, "run_job", fake_run)
     mgr: JobManager = c.app.state.job_manager
     rec = mgr.create(
-        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="roblox"
+        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="single"
     )
     with mgr._lock:
         mgr._active_id = None
@@ -405,7 +404,7 @@ def test_download_error_422(tmp_path, monkeypatch):
     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
     mgr: JobManager = c.app.state.job_manager
     rec = mgr.create(
-        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="roblox"
+        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="single"
     )
     rec.status = "error"
     rec.error = "boom"

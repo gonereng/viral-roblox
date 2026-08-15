@@ -11,7 +11,13 @@ from typing import Literal
 from pathlib import Path
 
 from roblox_viral.captions import write_ass
-from roblox_viral.render import render_still, render_video
+from roblox_viral.reddit_clips import plan_reddit_clips
+from roblox_viral.render import (
+    build_reddit_background,
+    probe_duration_seconds,
+    render_still,
+    render_video,
+)
 from roblox_viral.story import join_for_tts, split_sentences
 from roblox_viral.voice import (
     DEFAULT_PITCH,
@@ -24,9 +30,10 @@ from roblox_viral.voice import (
 )
 from roblox_viral.web.config import Settings
 from roblox_viral.web.library import (
+    list_videos,
     make_output_name,
     resolve_image,
-    resolve_roblox_media,
+    resolve_source,
     validate_image_filename,
     validate_video_filename,
 )
@@ -42,6 +49,13 @@ JobStatus = Literal[
 
 # uuid4().hex — reject path traversal / odd filenames
 _SAFE_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+def normalize_mode(mode: str) -> str:
+    normalized = "single" if mode == "roblox" else mode
+    if normalized not in ("single", "picture", "reddit"):
+        raise ValueError(f"Invalid mode: {mode!r}")
+    return normalized
 
 
 class BusyError(Exception):
@@ -61,7 +75,7 @@ class JobRecord:
     pitch: int = DEFAULT_PITCH
     speed: int = DEFAULT_SPEED
     video_speed: int = DEFAULT_VIDEO_SPEED
-    mode: str = "roblox"  # "roblox" | "picture"
+    mode: str = "single"  # "single" | "picture" | "reddit"
     ken_burns: bool = False
     url: str | None = None
     stem: str | None = None
@@ -87,16 +101,21 @@ class JobManager:
         pitch: int = DEFAULT_PITCH,
         speed: int = DEFAULT_SPEED,
         video_speed: int = DEFAULT_VIDEO_SPEED,
-        mode: str = "roblox",
+        mode: str = "single",
         ken_burns: bool = False,
         ephemeral: bool = False,
     ) -> JobRecord:
         format_edge_pitch(pitch)
         format_edge_rate(speed)
         validate_video_speed(video_speed)
-        if mode not in ("roblox", "picture"):
-            raise ValueError(f"Invalid mode: {mode!r}")
-        if ephemeral:
+        mode = normalize_mode(mode)
+        if mode == "reddit":
+            if not list_videos(settings):
+                raise ValueError("Reddit mode requires at least one video")
+            source_name = source_name or "reddit"
+            ken_burns = False
+            ephemeral = False
+        elif ephemeral:
             safe = Path(source_name).name
             if safe != source_name or not safe:
                 raise ValueError("Invalid source_name")
@@ -108,7 +127,7 @@ class JobManager:
         elif mode == "picture":
             resolve_image(settings, source_name)
         else:
-            resolve_roblox_media(settings, source_name)
+            resolve_source(settings, source_name)
             ken_burns = False
         sentences = split_sentences(story)
         if not sentences:
@@ -181,7 +200,7 @@ class JobManager:
                 video_speed=int(data["video_speed"])
                 if "video_speed" in data
                 else DEFAULT_VIDEO_SPEED,
-                mode=str(data.get("mode") or "roblox"),
+                mode=normalize_mode(str(data.get("mode") or "single")),
                 ken_burns=bool(data.get("ken_burns", False)),
                 url=data.get("url"),
                 stem=data.get("stem"),
@@ -216,7 +235,7 @@ class JobManager:
             job_dir.mkdir(parents=True, exist_ok=True)
             narration_path = job_dir / "narration.mp3"
             ass_path = job_dir / "captions.ass"
-            output_name = make_output_name(record.source_name)
+            output_name = make_output_name(record.source_name or "reddit")
             output_path = settings.outputs_dir / output_name
 
             self._set_status(settings, record, "synthesizing")
@@ -239,8 +258,26 @@ class JobManager:
                     raise FileNotFoundError(record.source_name)
             elif record.mode == "picture":
                 media_path = resolve_image(settings, record.source_name)
+            elif record.mode == "reddit":
+                videos = [video.path for video in list_videos(settings)]
+                durations = {
+                    video_path: probe_duration_seconds(video_path)
+                    for video_path in videos
+                }
+                narration_duration = probe_duration_seconds(narration_path)
+                segments = plan_reddit_clips(
+                    videos,
+                    narration_duration,
+                    durations=durations,
+                )
+                media_path = job_dir / "reddit_bg.mp4"
+                build_reddit_background(
+                    segments,
+                    media_path,
+                    work_dir=job_dir,
+                )
             else:
-                media_path = resolve_roblox_media(settings, record.source_name)
+                media_path = resolve_source(settings, record.source_name)
 
             if record.mode == "picture":
                 render_still(
