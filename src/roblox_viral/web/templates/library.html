@@ -2,44 +2,128 @@
 {% block title %}Library — Roblox Viral{% endblock %}
 {% block content %}
   <h1>Library</h1>
-  <p class="lede">
-    Upload a gameplay clip. Clips are split into
-    <strong>1-minute slices</strong> named <code>name-1.mp4</code>,
-    <code>name-2.mp4</code>, …
-    A leftover shorter than 1 minute is discarded.
-    Pick a slice on the Generate page.
-  </p>
+  <p class="lede">Manage source media used to generate your videos.</p>
 
   {% if error %}
-  <p class="error">{{ error }}</p>
+  <p class="error" role="alert">{{ error }}</p>
   {% endif %}
   {% if message %}
-  <p class="ok">{{ message }}</p>
+  <p class="ok" role="status">{{ message }}</p>
   {% endif %}
 
-  <form class="upload-form" method="post" action="/library/upload" enctype="multipart/form-data">
-    <label>
-      Video file
-      <input type="file" name="file" accept=".mp4,.mov,.webm,.mkv,video/*" required>
-    </label>
-    <button type="submit">Upload</button>
-  </form>
+  <div class="mode-tabs" role="tablist" aria-label="Library media">
+    <button id="tab-slices" type="button" role="tab"
+            aria-selected="{{ 'true' if tab == 'slices' else 'false' }}"
+            aria-controls="panel-slices"
+            tabindex="{{ '0' if tab == 'slices' else '-1' }}">
+      1-minute clips
+    </button>
+    <button id="tab-videos" type="button" role="tab"
+            aria-selected="{{ 'true' if tab == 'videos' else 'false' }}"
+            aria-controls="panel-videos"
+            tabindex="{{ '0' if tab == 'videos' else '-1' }}">
+      Videos
+    </button>
+    <button id="tab-images" type="button" role="tab"
+            aria-selected="{{ 'true' if tab == 'images' else 'false' }}"
+            aria-controls="panel-images"
+            tabindex="{{ '0' if tab == 'images' else '-1' }}">
+      Images
+    </button>
+  </div>
 
-  <h2>Sources (1-minute slices)</h2>
-  {% if sources %}
-  <ul class="source-list">
-    {% for s in sources %}
-    <li>
-      <span>{{ s.name }}</span>
-      <span class="meta">{{ s.size_bytes }} bytes</span>
-      <form method="post" action="/library/delete" class="inline-form">
-        <input type="hidden" name="name" value="{{ s.name }}">
-        <button type="submit">Delete</button>
-      </form>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p>No source videos yet.</p>
-  {% endif %}
+  <section id="panel-slices" role="tabpanel" aria-labelledby="tab-slices"
+           {% if tab != "slices" %}hidden{% endif %}>
+    <h2>1-minute clips</h2>
+    <p class="lede">
+      Upload a gameplay video to split it into complete one-minute clips.
+      Any shorter remainder is discarded.
+    </p>
+    <form class="upload-form" method="post" action="/library/upload"
+          enctype="multipart/form-data">
+      <label for="slice-file">Video file</label>
+      <input id="slice-file" type="file" name="file"
+             accept=".mp4,.mov,.webm,.mkv,video/*" required>
+      <button type="submit">Upload and slice</button>
+    </form>
+
+    {% if sources %}
+    <ul class="source-list">
+      {% for source in sources %}
+      <li>
+        <span>{{ source.name }}</span>
+        <span class="meta">{{ source.size_bytes }} bytes</span>
+        <form method="post" action="/library/delete" class="inline-form">
+          <input type="hidden" name="name" value="{{ source.name }}">
+          <button type="submit">Delete <span class="visually-hidden">{{ source.name }}</span></button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p>No 1-minute clips yet.</p>
+    {% endif %}
+  </section>
+
+  <section id="panel-videos" role="tabpanel" aria-labelledby="tab-videos"
+           {% if tab != "videos" %}hidden{% endif %}>
+    <h2>Videos</h2>
+    <p class="lede">Upload complete videos without slicing them.</p>
+    <form class="upload-form" method="post" action="/library/videos/upload"
+          enctype="multipart/form-data">
+      <label for="video-file">Video file</label>
+      <input id="video-file" type="file" name="file"
+             accept=".mp4,.mov,.webm,.mkv,video/*" required>
+      <button type="submit">Upload video</button>
+    </form>
+
+    {% if videos %}
+    <ul class="source-list">
+      {% for video in videos %}
+      <li>
+        <span>{{ video.name }}</span>
+        <span class="meta">{{ video.size_bytes }} bytes</span>
+        <form method="post" action="/library/videos/delete" class="inline-form">
+          <input type="hidden" name="name" value="{{ video.name }}">
+          <button type="submit">Delete <span class="visually-hidden">{{ video.name }}</span></button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p>No videos yet.</p>
+    {% endif %}
+  </section>
+
+  <section id="panel-images" role="tabpanel" aria-labelledby="tab-images"
+           {% if tab != "images" %}hidden{% endif %}>
+    <h2>Images</h2>
+    <p class="lede">Upload JPG, PNG, or WebP images.</p>
+    <form id="image-upload-form" class="upload-form" enctype="multipart/form-data">
+      <label for="image-file">Image file</label>
+      <input id="image-file" type="file" name="file"
+             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" required>
+      <button type="submit">Upload image</button>
+    </form>
+    <p id="image-status" role="status" aria-live="polite"></p>
+
+    {% if images %}
+    <ul class="source-list">
+      {% for image in images %}
+      <li>
+        <span>{{ image.name }}</span>
+        <span class="meta">{{ image.size_bytes }} bytes</span>
+        <button type="button" class="image-delete" data-name="{{ image.name }}">
+          Delete <span class="visually-hidden">{{ image.name }}</span>
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p>No images yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}
+{% block scripts %}
+  <script src="/static/library.js" defer></script>
 {% endblock %}

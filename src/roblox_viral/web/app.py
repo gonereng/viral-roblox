@@ -39,12 +39,15 @@ from roblox_viral.web import library as library_mod
 from roblox_viral.web.library import (
     delete_image,
     delete_source,
+    delete_video,
     list_images,
     list_outputs,
     list_roblox_sources,
     list_sources,
+    list_videos,
     save_image,
     save_upload,
+    save_video,
 )
 from roblox_viral.web.prompt import load_prompt, save_prompt
 from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
@@ -55,6 +58,23 @@ STATIC_DIR = WEB_DIR / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _UPLOAD_CHUNK = 1024 * 1024  # 1 MiB
+
+
+def _library_ctx(
+    settings: Settings,
+    *,
+    error: str | None = None,
+    message: str | None = None,
+    tab: str = "slices",
+) -> dict:
+    return {
+        "sources": list_sources(settings),
+        "videos": list_videos(settings),
+        "images": list_images(settings),
+        "error": error,
+        "message": message,
+        "tab": tab,
+    }
 
 
 class CreateJobBody(BaseModel):
@@ -165,17 +185,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/library", response_class=HTMLResponse)
     def library_page(
         request: Request,
+        tab: str = "slices",
         _: None = Depends(require_login),
     ) -> HTMLResponse:
         settings = request.app.state.settings
+        if tab not in {"slices", "videos", "images"}:
+            tab = "slices"
         return templates.TemplateResponse(
             request,
             "library.html",
-            {
-                "sources": list_sources(settings),
-                "error": None,
-                "message": None,
-            },
+            _library_ctx(settings, tab=tab),
         )
 
     @app.post("/library/upload", response_model=None)
@@ -193,25 +212,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return templates.TemplateResponse(
                 request,
                 "library.html",
-                {
-                    "sources": list_sources(settings),
-                    "error": str(exc),
-                    "message": None,
-                },
+                _library_ctx(settings, error=str(exc), tab="slices"),
                 status_code=400,
             )
         names = ", ".join(s.name for s in slices)
         return templates.TemplateResponse(
             request,
             "library.html",
-            {
-                "sources": list_sources(settings),
-                "error": None,
-                "message": (
+            _library_ctx(
+                settings,
+                message=(
                     f"Created {len(slices)} one-minute slice(s): {names}. "
                     "A leftover under 1 minute was discarded if present."
                 ),
-            },
+                tab="slices",
+            ),
         )
 
     @app.post("/library/delete", response_model=None)
@@ -227,14 +242,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return templates.TemplateResponse(
                 request,
                 "library.html",
-                {
-                    "sources": list_sources(settings),
-                    "error": str(exc),
-                    "message": None,
-                },
+                _library_ctx(settings, error=str(exc), tab="slices"),
                 status_code=400,
             )
         return RedirectResponse("/library", status_code=HTTP_303_SEE_OTHER)
+
+    @app.post("/library/videos/upload", response_model=None)
+    async def library_video_upload(
+        request: Request,
+        file: UploadFile = File(...),
+        _: None = Depends(require_login),
+    ) -> Response:
+        settings = request.app.state.settings
+        try:
+            data = await _read_upload_capped(file)
+            saved = save_video(settings, file.filename or "", data)
+        except (ValueError, FileNotFoundError) as exc:
+            return templates.TemplateResponse(
+                request,
+                "library.html",
+                _library_ctx(settings, error=str(exc), tab="videos"),
+                status_code=400,
+            )
+        return templates.TemplateResponse(
+            request,
+            "library.html",
+            _library_ctx(
+                settings,
+                message=f"Uploaded video: {saved.name}.",
+                tab="videos",
+            ),
+        )
+
+    @app.post("/library/videos/delete", response_model=None)
+    def library_video_delete(
+        request: Request,
+        name: str = Form(...),
+        _: None = Depends(require_login),
+    ) -> Response:
+        settings = request.app.state.settings
+        try:
+            delete_video(settings, name)
+        except (ValueError, FileNotFoundError) as exc:
+            return templates.TemplateResponse(
+                request,
+                "library.html",
+                _library_ctx(settings, error=str(exc), tab="videos"),
+                status_code=400,
+            )
+        return templates.TemplateResponse(
+            request,
+            "library.html",
+            _library_ctx(
+                settings,
+                message=f"Deleted video: {name}.",
+                tab="videos",
+            ),
+        )
 
     @app.get("/prompt", response_class=HTMLResponse)
     def prompt_page(
