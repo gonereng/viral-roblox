@@ -398,7 +398,7 @@ def test_build_reddit_background_concats_trimmed_segments(tmp_path, monkeypatch)
     filter_complex = cmd[cmd.index("-filter_complex") + 1]
     normalize = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,format=yuv420p,setpts=PTS-STARTPTS"
+        "crop=1080:1920,setsar=1,fps=30,format=yuv420p,setpts=PTS-STARTPTS"
     )
     assert f"[0:v]{normalize}[v0]" in filter_complex
     assert f"[1:v]{normalize}[v1]" in filter_complex

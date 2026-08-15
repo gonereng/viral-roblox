@@ -110,6 +110,8 @@ def build_reddit_background(
             f"[{index}:v]"
             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+            f"setsar=1,"
+            f"fps=30,"
             f"format=yuv420p,"
             f"setpts=PTS-STARTPTS[{label}]"
         )
