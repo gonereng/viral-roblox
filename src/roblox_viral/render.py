@@ -13,7 +13,8 @@ from roblox_viral.voice import validate_video_speed
 OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
 OVERLAY_DURATION_S = 3.5
-OVERLAY_HEIGHT = OUTPUT_HEIGHT // 2
+OVERLAY_MAX_W = OUTPUT_WIDTH
+OVERLAY_MAX_H = OUTPUT_HEIGHT
 OVERLAY_CHROMA_COLOR = "0x00FE00"
 OVERLAY_CHROMA_SIMILARITY = "0.30"
 OVERLAY_CHROMA_BLEND = "0.10"
@@ -99,7 +100,7 @@ def render_video(
     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
 
     When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
-    composite it centered (half frame height) over captions at the start.
+    composite it centered (fit inside full frame) over captions at the start.
 
     Original video audio is discarded by mapping only the TTS audio stream.
     Intermediate files live under work_dir when provided; otherwise only final out is kept
@@ -186,7 +187,7 @@ def render_video(
             f"[0:v]{base}[base];"
             f"[base]ass='{ass_escaped}'[cap];"
             f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
-            f"format=yuva420p,scale=-2:{OVERLAY_HEIGHT}[ov];"
+            f"format=yuva420p,scale={OVERLAY_MAX_W}:{OVERLAY_MAX_H}:force_original_aspect_ratio=decrease[ov];"
             f"[cap][ov]overlay=(W-w)/2:(H-h)/2:enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[outv]"
         )
         cmd = [

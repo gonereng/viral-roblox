@@ -307,3 +307,39 @@ def test_render_video_overlay_includes_setpts_on_base(tmp_path, monkeypatch):
     fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
     assert "setpts=100/150*PTS" in fc
     assert "lte(t,3.5)" in fc
+
+
+def test_render_video_overlay_fits_full_frame(tmp_path, monkeypatch):
+    video = _touch(tmp_path / "game.mp4")
+    audio = _touch(tmp_path / "n.mp3")
+    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+    overlay = _touch(tmp_path / "overlay.mp4")
+    out = tmp_path / "out.mp4"
+    seen = {}
+
+    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        seen["cmd"] = cmd
+        out.write_bytes(b"mp4")
+
+        class R:
+            returncode = 0
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+
+    render_video(
+        video_path=video,
+        audio_path=audio,
+        ass_path=ass,
+        output_path=out,
+        overlay_path=overlay,
+    )
+    fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+    assert f"scale=1080:1920:force_original_aspect_ratio=decrease" in fc
+    assert "scale=-2:" not in fc
+    assert "lte(t,3.5)" in fc
