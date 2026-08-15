@@ -15,7 +15,12 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
-from roblox_viral.voice import DEFAULT_PITCH, DEFAULT_SPEED
+from roblox_viral.voice import (
+    DEFAULT_PITCH,
+    DEFAULT_SPEED,
+    format_edge_pitch,
+    format_edge_rate,
+)
 from roblox_viral.web import library as library_mod
 from roblox_viral.web.auth import require_api_key
 from roblox_viral.web.jobs import BusyError, JobManager
@@ -33,6 +38,15 @@ def _mode_from_type(video_type: str) -> str:
     raise ValueError("type must be 'roblox' or 'leni'")
 
 
+def _optional_int(raw: str | None, default: int, label: str) -> int:
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an int") from exc
+
+
 @router.post("/videos")
 async def create_video(
     request: Request,
@@ -42,6 +56,8 @@ async def create_video(
     story: str = Form(""),
     type: str = Form(""),
     source_name: str = Form(""),
+    pitch: str = Form(""),
+    speed: str = Form(""),
     media: UploadFile | None = File(None),
 ) -> dict:
     settings = request.app.state.settings
@@ -65,6 +81,14 @@ async def create_video(
         )
 
     voice_s = (voice or "").strip() or DEFAULT_VOICE
+    try:
+        pitch_i = _optional_int(pitch, DEFAULT_PITCH, "pitch")
+        speed_i = _optional_int(speed, DEFAULT_SPEED, "speed")
+        format_edge_pitch(pitch_i)
+        format_edge_rate(speed_i)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     ephemeral = False
     input_bytes: bytes | None = None
     stored_name = name
@@ -101,8 +125,8 @@ async def create_video(
             stored_name,
             story,
             voice_s,
-            pitch=DEFAULT_PITCH,
-            speed=DEFAULT_SPEED,
+            pitch=pitch_i,
+            speed=speed_i,
             mode=mode,
             ken_burns=False,
             ephemeral=ephemeral,

@@ -88,6 +88,68 @@ def test_create_leni_maps_to_picture(tmp_path, monkeypatch):
     assert st.json()["mode"] == "picture"
 
 
+def test_create_accepts_optional_pitch_and_speed(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+            "pitch": "-20",
+            "speed": "150",
+        },
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["pitch"] == -20
+    assert st.json()["speed"] == 150
+
+
+def test_create_defaults_pitch_and_speed(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+        },
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["pitch"] == 15
+    assert st.json()["speed"] == 130
+
+
+def test_create_invalid_pitch_400(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "roblox",
+            "source_name": "clip.mp4",
+            "pitch": "999",
+        },
+    )
+    assert r.status_code == 400
+
+
 def test_create_bad_type_400(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     r = c.post(

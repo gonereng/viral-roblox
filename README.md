@@ -96,6 +96,7 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 **Create** — `POST /api/v1/videos` as `multipart/form-data`:
 
 - `voice`, `story`, `type` (`roblox`|`leni`)
+- optional `pitch` (−100…100, default 15) and `speed` (50…200, default 130)
 - either file field `media` **or** text field `source_name` (Library name)
 
 Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`.
@@ -112,6 +113,8 @@ $create = curl.exe -s -X POST "$base/api/v1/videos" `
   -F "voice=en-US-EmmaNeural" `
   -F "story=Hello from n8n.`nThis is a test." `
   -F "type=roblox" `
+  -F "pitch=15" `
+  -F "speed=130" `
   -F "media=@$video"
 $create
 $id = ($create | ConvertFrom-Json).id
