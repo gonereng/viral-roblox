@@ -25,8 +25,10 @@ from starlette.status import HTTP_303_SEE_OTHER, HTTP_409_CONFLICT
 from roblox_viral.voice import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
+    DEFAULT_VIDEO_SPEED,
     format_edge_pitch,
     format_edge_rate,
+    validate_video_speed,
 )
 from roblox_viral.web.api_v1 import router as api_v1_router
 from roblox_viral.web.auth import require_login, set_authenticated
@@ -60,6 +62,7 @@ class CreateJobBody(BaseModel):
     voice: str | None = None
     pitch: int | None = None
     speed: int | None = None
+    video_speed: int | None = None
     mode: str = "roblox"
     ken_burns: bool = False
 
@@ -353,9 +356,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         voice = body.voice or DEFAULT_VOICE
         pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
         speed = DEFAULT_SPEED if body.speed is None else body.speed
+        video_speed = (
+            DEFAULT_VIDEO_SPEED if body.video_speed is None else body.video_speed
+        )
         try:
             format_edge_pitch(pitch)
             format_edge_rate(speed)
+            validate_video_speed(video_speed)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
@@ -366,6 +373,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 voice,
                 pitch=pitch,
                 speed=speed,
+                video_speed=video_speed,
                 mode=body.mode,
                 ken_burns=body.ken_burns,
             )

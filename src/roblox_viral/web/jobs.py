@@ -16,15 +16,17 @@ from roblox_viral.story import join_for_tts, split_sentences
 from roblox_viral.voice import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
+    DEFAULT_VIDEO_SPEED,
     EdgeTTSProvider,
     format_edge_pitch,
     format_edge_rate,
+    validate_video_speed,
 )
 from roblox_viral.web.config import Settings
 from roblox_viral.web.library import (
     make_output_name,
     resolve_image,
-    resolve_source,
+    resolve_roblox_media,
     slice_into_minute_parts,
     validate_image_filename,
     validate_video_filename,
@@ -66,6 +68,7 @@ class JobRecord:
     kind: str = "render"  # "render" | "youtube"
     pitch: int = DEFAULT_PITCH
     speed: int = DEFAULT_SPEED
+    video_speed: int = DEFAULT_VIDEO_SPEED
     mode: str = "roblox"  # "roblox" | "picture"
     ken_burns: bool = False
     url: str | None = None
@@ -91,12 +94,14 @@ class JobManager:
         voice: str,
         pitch: int = DEFAULT_PITCH,
         speed: int = DEFAULT_SPEED,
+        video_speed: int = DEFAULT_VIDEO_SPEED,
         mode: str = "roblox",
         ken_burns: bool = False,
         ephemeral: bool = False,
     ) -> JobRecord:
         format_edge_pitch(pitch)
         format_edge_rate(speed)
+        validate_video_speed(video_speed)
         if mode not in ("roblox", "picture"):
             raise ValueError(f"Invalid mode: {mode!r}")
         if ephemeral:
@@ -111,7 +116,7 @@ class JobManager:
         elif mode == "picture":
             resolve_image(settings, source_name)
         else:
-            resolve_source(settings, source_name)
+            resolve_roblox_media(settings, source_name)
             ken_burns = False
         sentences = split_sentences(story)
         if not sentences:
@@ -132,6 +137,7 @@ class JobManager:
                 kind="render",
                 pitch=pitch,
                 speed=speed,
+                video_speed=video_speed,
                 mode=mode,
                 ken_burns=ken_burns,
                 ephemeral=ephemeral,
@@ -215,6 +221,9 @@ class JobManager:
                 kind=str(data.get("kind") or "render"),
                 pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
                 speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
+                video_speed=int(data["video_speed"])
+                if "video_speed" in data
+                else DEFAULT_VIDEO_SPEED,
                 mode=str(data.get("mode") or "roblox"),
                 ken_burns=bool(data.get("ken_burns", False)),
                 url=data.get("url"),
@@ -274,7 +283,7 @@ class JobManager:
             elif record.mode == "picture":
                 media_path = resolve_image(settings, record.source_name)
             else:
-                media_path = resolve_source(settings, record.source_name)
+                media_path = resolve_roblox_media(settings, record.source_name)
 
             if record.mode == "picture":
                 render_still(
@@ -293,6 +302,7 @@ class JobManager:
                     output_path=output_path,
                     work_dir=job_dir,
                     overlay_path=settings.overlay_video_path,
+                    video_speed=record.video_speed,
                 )
 
             record.output_name = output_name

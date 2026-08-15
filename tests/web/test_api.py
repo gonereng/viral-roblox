@@ -480,3 +480,54 @@ def test_create_roblox_job_ignores_ken_burns(tmp_path, monkeypatch):
     data = c.get(f"/api/jobs/{r.json()['id']}").json()
     assert data["mode"] == "roblox"
     assert data["ken_burns"] is False
+
+
+def test_api_jobs_accepts_video_speed(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    _seed_source(c)
+
+    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
+        record = self.get(job_id)
+        assert record is not None
+        record.output_name = f"{job_id}.mp4"
+        out = settings.outputs_dir / record.output_name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"fake-mp4")
+        record.status = "done"
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
+
+    r = c.post(
+        "/api/jobs",
+        json={
+            "source_name": "clip.mp4",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+            "video_speed": 120,
+        },
+    )
+    assert r.status_code == 200
+    job_id = r.json()["id"]
+    data = c.get(f"/api/jobs/{job_id}").json()
+    assert data["video_speed"] == 120
+
+
+def test_api_jobs_rejects_video_speed(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    _seed_source(c)
+
+    r = c.post(
+        "/api/jobs",
+        json={
+            "source_name": "clip.mp4",
+            "story": "Hi.\n",
+            "voice": "en-US-EmmaNeural",
+            "video_speed": 10,
+        },
+    )
+    assert r.status_code == 400

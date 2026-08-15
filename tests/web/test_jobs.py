@@ -361,3 +361,67 @@ def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
     mgr.run_job(s, job.id)
     assert mgr.get(job.id, s).status == "done"
     assert seen["video_path"] == input_path.resolve()
+
+
+def test_create_job_persists_video_speed(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "raw-only.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    record = mgr.create(
+        s,
+        "raw-only.mp4",
+        "Hello world.\n",
+        "en-US-EmmaNeural",
+        video_speed=150,
+    )
+    assert record.video_speed == 150
+    loaded = mgr.get(record.id, s)
+    assert loaded is not None
+    assert loaded.video_speed == 150
+
+
+def test_create_job_rejects_bad_video_speed(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    with pytest.raises(ValueError):
+        mgr.create(
+            s,
+            "clip.mp4",
+            "Hello world.\n",
+            "en-US-EmmaNeural",
+            video_speed=999,
+        )
+
+
+def test_run_job_passes_video_speed_to_render(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    seen = {}
+
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        seen.update(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(
+        s,
+        "clip.mp4",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        video_speed=175,
+    )
+    mgr.run_job(s, job.id)
+    assert seen["video_speed"] == 175
+    assert mgr.get(job.id, s).status == "done"
