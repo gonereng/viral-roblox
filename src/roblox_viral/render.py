@@ -6,8 +6,12 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from roblox_viral.voice import validate_video_speed
+
+if TYPE_CHECKING:
+    from roblox_viral.reddit_clips import ClipSegment
 
 
 OUTPUT_WIDTH = 1080
@@ -69,6 +73,69 @@ def probe_duration_seconds(media_path: Path | str) -> float:
     if duration <= 0:
         raise RenderError(f"Could not determine duration for {media_path}")
     return duration
+
+
+def build_reddit_background(
+    segments: list[ClipSegment],
+    output_path: Path,
+    *,
+    work_dir: Path | None = None,
+) -> Path:
+    """Trim and concatenate reddit clip segments into a silent video."""
+    if not segments:
+        raise RenderError("Cannot build reddit background without clip segments")
+
+    ffmpeg = require_ffmpeg()
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if work_dir is not None:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+
+    cmd = [ffmpeg, "-y"]
+    filter_parts = []
+    concat_inputs = []
+    for index, segment in enumerate(segments):
+        cmd.extend(
+            [
+                "-ss",
+                f"{segment.start_s:.3f}",
+                "-t",
+                f"{segment.duration_s:.3f}",
+                "-i",
+                str(segment.path),
+            ]
+        )
+        label = f"v{index}"
+        filter_parts.append(f"[{index}:v]setpts=PTS-STARTPTS[{label}]")
+        concat_inputs.append(f"[{label}]")
+
+    filter_parts.append(
+        "".join(concat_inputs) + f"concat=n={len(segments)}:v=1:a=0[outv]"
+    )
+    cmd.extend(
+        [
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            "[outv]",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            "-movflags",
+            "+faststart",
+            str(out),
+        ]
+    )
+
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RenderError(
+            "ffmpeg reddit background concat failed:\n"
+            + (result.stderr[-2000:] if result.stderr else "no stderr")
+        )
+    return out
 
 
 def _ass_filter_path(ass_path: Path) -> str:

@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from roblox_viral.render import RenderError, render_still, render_video
+from roblox_viral.reddit_clips import ClipSegment
+from roblox_viral.render import (
+    RenderError,
+    build_reddit_background,
+    render_still,
+    render_video,
+)
 
 
 def _touch(path: Path, data: bytes = b"x") -> Path:
@@ -343,3 +349,78 @@ def test_render_video_overlay_fits_full_frame(tmp_path, monkeypatch):
     assert f"scale=1080:1920:force_original_aspect_ratio=decrease" in fc
     assert "scale=-2:" not in fc
     assert "lte(t,3.5)" in fc
+
+
+def test_build_reddit_background_concats_trimmed_segments(tmp_path, monkeypatch):
+    first = _touch(tmp_path / "first.mp4")
+    second = _touch(tmp_path / "second.mp4")
+    out = tmp_path / "nested" / "background.mp4"
+    work_dir = tmp_path / "work"
+    seen = {}
+
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        seen["cmd"] = cmd
+        out.write_bytes(b"mp4")
+
+        class R:
+            returncode = 0
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+
+    result = build_reddit_background(
+        [
+            ClipSegment(path=first, start_s=1.25, duration_s=2.5),
+            ClipSegment(path=second, start_s=0.0, duration_s=3.75),
+        ],
+        out,
+        work_dir=work_dir,
+    )
+
+    assert result == out
+    assert out.is_file()
+    assert work_dir.is_dir()
+    cmd = seen["cmd"]
+    assert cmd.count("-i") == 2
+    assert str(first) in cmd
+    assert str(second) in cmd
+    assert cmd[cmd.index(str(first)) - 5 : cmd.index(str(first))] == [
+        "-ss",
+        "1.250",
+        "-t",
+        "2.500",
+        "-i",
+    ]
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
+    assert "[0:v]setpts=PTS-STARTPTS[v0]" in filter_complex
+    assert "[1:v]setpts=PTS-STARTPTS[v1]" in filter_complex
+    assert "[v0][v1]concat=n=2:v=1:a=0[outv]" in filter_complex
+    assert cmd[cmd.index("-map") + 1] == "[outv]"
+    assert cmd[cmd.index("-c:v") + 1] == "libx264"
+    assert "-an" in cmd
+
+
+def test_build_reddit_background_raises_render_error_on_ffmpeg_failure(
+    tmp_path, monkeypatch
+):
+    source = _touch(tmp_path / "source.mp4")
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        class R:
+            returncode = 1
+            stderr = "concat exploded"
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+
+    with pytest.raises(RenderError, match="concat exploded"):
+        build_reddit_background(
+            [ClipSegment(path=source, start_s=0.0, duration_s=1.0)],
+            tmp_path / "out.mp4",
+        )
