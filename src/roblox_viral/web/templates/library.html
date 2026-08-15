@@ -68,13 +68,13 @@
   <section id="panel-videos" role="tabpanel" aria-labelledby="tab-videos"
            {% if tab != "videos" %}hidden{% endif %}>
     <h2>Videos</h2>
-    <p class="lede">Upload complete videos without slicing them.</p>
+    <p class="lede">Upload one or more complete videos without slicing them.</p>
     <form class="upload-form" method="post" action="/library/videos/upload"
           enctype="multipart/form-data">
-      <label for="video-file">Video file</label>
-      <input id="video-file" type="file" name="file"
+      <label for="video-file">Video files</label>
+      <input id="video-file" type="file" name="files" multiple
              accept=".mp4,.mov,.webm,.mkv,video/*" required>
-      <button type="submit">Upload video</button>
+      <button type="submit">Upload video(s)</button>
     </form>
 
     {% if videos %}

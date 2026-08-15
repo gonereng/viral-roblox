@@ -43,6 +43,16 @@ def test_rejects_path_traversal(tmp_path, monkeypatch):
         library.resolve_source(s, "../evil.mp4")
 
 
+def test_validate_video_filename_allows_parentheses():
+    assert library.validate_video_filename("clip (1).mp4") == "clip (1).mp4"
+    assert library.validate_video_filename("foo(bar).mov") == "foo(bar).mov"
+
+
+def test_validate_video_filename_still_rejects_bad_chars():
+    with pytest.raises(ValueError, match="Invalid video filename"):
+        library.validate_video_filename("clip@.mp4")
+
+
 def test_list_outputs_newest_first(tmp_path, monkeypatch):
     import os
     import time

@@ -10,7 +10,7 @@ from pathlib import Path
 from roblox_viral.render import RenderError, probe_duration_seconds, require_ffmpeg
 from roblox_viral.web.config import Settings
 
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9._ -]+\.(mp4|mov|webm|mkv)$", re.I)
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9._ ()-]+\.(mp4|mov|webm|mkv)$", re.I)
 _SAFE_IMAGE_NAME = re.compile(r"^[A-Za-z0-9._ -]+\.(jpg|jpeg|png|webp)$", re.I)
 MAX_UPLOAD_BYTES = 500_000_000
 MAX_IMAGE_UPLOAD_BYTES = 20_000_000

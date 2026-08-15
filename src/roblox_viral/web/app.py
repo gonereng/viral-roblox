@@ -250,28 +250,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/library/videos/upload", response_model=None)
     async def library_video_upload(
         request: Request,
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(...),
         _: None = Depends(require_login),
     ) -> Response:
         settings = request.app.state.settings
-        try:
-            data = await _read_upload_capped(file)
-            saved = save_video(settings, file.filename or "", data)
-        except (ValueError, FileNotFoundError) as exc:
+        if not files:
             return templates.TemplateResponse(
                 request,
                 "library.html",
-                _library_ctx(settings, error=str(exc), tab="videos"),
+                _library_ctx(
+                    settings,
+                    error="Select at least one video file",
+                    tab="videos",
+                ),
                 status_code=400,
             )
+        saved_names: list[str] = []
+        errors: list[str] = []
+        for file in files:
+            name = file.filename or ""
+            if not name:
+                continue
+            try:
+                data = await _read_upload_capped(file)
+                saved = save_video(settings, name, data)
+                saved_names.append(saved.name)
+            except (ValueError, FileNotFoundError) as exc:
+                errors.append(f"{name}: {exc}")
+        if not saved_names:
+            detail = "; ".join(errors) if errors else "No video files uploaded"
+            return templates.TemplateResponse(
+                request,
+                "library.html",
+                _library_ctx(settings, error=detail, tab="videos"),
+                status_code=400,
+            )
+        message = (
+            f"Uploaded {len(saved_names)} video(s): {', '.join(saved_names)}."
+        )
+        if errors:
+            message += f" Some failed: {'; '.join(errors)}."
         return templates.TemplateResponse(
             request,
             "library.html",
-            _library_ctx(
-                settings,
-                message=f"Uploaded video: {saved.name}.",
-                tab="videos",
-            ),
+            _library_ctx(settings, message=message, tab="videos"),
         )
 
     @app.post("/library/videos/delete", response_model=None)

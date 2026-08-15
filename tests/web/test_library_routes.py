@@ -26,7 +26,7 @@ def test_library_raw_video_upload_keeps_videos_tab(tmp_path, monkeypatch):
 
     response = client.post(
         "/library/videos/upload",
-        files={"file": ("clip.mp4", b"data", "video/mp4")},
+        files=[("files", ("clip.mp4", b"data", "video/mp4"))],
     )
 
     assert response.status_code == 200
@@ -35,6 +35,25 @@ def test_library_raw_video_upload_keeps_videos_tab(tmp_path, monkeypatch):
     assert 'aria-selected="true"' in response.text[
         response.text.index('id="tab-videos"') :
     ][:200]
+
+
+def test_library_raw_video_multi_upload(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _login(client)
+
+    response = client.post(
+        "/library/videos/upload",
+        files=[
+            ("files", ("a (1).mp4", b"one", "video/mp4")),
+            ("files", ("b.mp4", b"two", "video/mp4")),
+        ],
+    )
+
+    assert response.status_code == 200
+    settings = client.app.state.settings
+    assert (settings.videos_dir / "a (1).mp4").read_bytes() == b"one"
+    assert (settings.videos_dir / "b.mp4").read_bytes() == b"two"
+    assert "Uploaded 2 video" in response.text
 
 
 def test_library_raw_video_delete_keeps_videos_tab(tmp_path, monkeypatch):
