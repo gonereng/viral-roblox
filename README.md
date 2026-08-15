@@ -58,7 +58,15 @@ Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story p
 | **Videos** | Upload full clips as-is, no slicing (`media/videos/`) |
 | **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
 
-On **Generate**, switch **Roblox** (pick a labeled clip from Library — `(1m)` slices or `(video)` raw) or **Picture** (pick an image from Library). Roblox mode adds a **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Picture videos support optional **Ken Burns** slow zoom. The greenscreen overlay applies to Roblox videos only.
+On **Generate**, pick a background mode via three tabs:
+
+| Tab | Behavior |
+|-----|----------|
+| **Single background video** | Pick a one-minute clip from Library → 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Greenscreen overlay at start. |
+| **Picture** | Pick an image from Library → Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
+| **Reddit** | No source picker — auto-concat random clips from Library → Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Greenscreen overlay at start. Requires at least one video in the Videos pool. |
+
+The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080×1920 frame** (2× the former half-height target), chromakeyed, and centered. Applies to **Single** and **Reddit** only.
 
 ### Local run
 
@@ -92,7 +100,7 @@ Optional env vars:
 | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
 | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
 | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
-| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
+| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are chromakeyed, scaled to fit inside the full 1080×1920 frame, centered, and composited at the start of **Single** and **Reddit** videos (audio ignored). |
 
 ### n8n API
 
