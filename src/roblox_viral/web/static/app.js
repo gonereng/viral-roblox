@@ -41,8 +41,11 @@
 
   const pitchInput = document.getElementById("pitch");
   const speedInput = document.getElementById("speed");
+  const videoSpeedInput = document.getElementById("video_speed");
   const pitchValue = document.getElementById("pitch-value");
   const speedValue = document.getElementById("speed-value");
+  const videoSpeedValue = document.getElementById("video-speed-value");
+  const videoSpeedField = document.getElementById("video-speed-field");
 
   function formatPitchLabel(n) {
     const v = Number(n);
@@ -54,10 +57,14 @@
   function syncVoiceSliders() {
     if (pitchValue) pitchValue.textContent = formatPitchLabel(pitchInput.value);
     if (speedValue) speedValue.textContent = formatSpeedLabel(speedInput.value);
+    if (videoSpeedValue && videoSpeedInput) {
+      videoSpeedValue.textContent = formatSpeedLabel(videoSpeedInput.value);
+    }
   }
   if (pitchInput && speedInput) {
     pitchInput.addEventListener("input", syncVoiceSliders);
     speedInput.addEventListener("input", syncVoiceSliders);
+    if (videoSpeedInput) videoSpeedInput.addEventListener("input", syncVoiceSliders);
     syncVoiceSliders();
   }
 
@@ -68,23 +75,8 @@
   const pictureBlock = document.getElementById("picture-source-block");
   const sourceSelect = document.getElementById("source_name");
   const imageSelect = document.getElementById("image_name");
-  const imageFile = document.getElementById("image-file");
-  const imageUploadBtn = document.getElementById("image-upload-btn");
-  const imageDeleteBtn = document.getElementById("image-delete-btn");
-  const imageErr = document.getElementById("image-error");
   const kenBurnsEl = document.getElementById("ken_burns");
   let currentMode = "roblox";
-
-  function showImageError(message) {
-    if (!imageErr) return;
-    imageErr.hidden = false;
-    imageErr.textContent = message;
-  }
-  function clearImageError() {
-    if (!imageErr) return;
-    imageErr.hidden = true;
-    imageErr.textContent = "";
-  }
   function imageSelectHasValue() {
     return Boolean(imageSelect && imageSelect.value);
   }
@@ -101,91 +93,13 @@
     const isPicture = mode === "picture";
     if (robloxBlock) robloxBlock.hidden = isPicture;
     if (pictureBlock) pictureBlock.hidden = !isPicture;
+    if (videoSpeedField) videoSpeedField.hidden = isPicture;
     if (tabRoblox) tabRoblox.setAttribute("aria-selected", isPicture ? "false" : "true");
     if (tabPicture) tabPicture.setAttribute("aria-selected", isPicture ? "true" : "false");
     syncGenerateEnabled();
   }
   if (tabRoblox) tabRoblox.addEventListener("click", () => setMode("roblox"));
   if (tabPicture) tabPicture.addEventListener("click", () => setMode("picture"));
-
-  if (imageUploadBtn && imageFile && imageSelect) {
-    imageUploadBtn.addEventListener("click", async () => {
-      clearImageError();
-      const file = imageFile.files && imageFile.files[0];
-      if (!file) {
-        showImageError("Choose an image file first");
-        return;
-      }
-      const data = new FormData();
-      data.append("file", file, file.name);
-      imageUploadBtn.disabled = true;
-      try {
-        const res = await fetch("/api/images", {
-          method: "POST",
-          headers: { Accept: "application/json" },
-          body: data,
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          showImageError(body.detail || `Upload failed (${res.status})`);
-          return;
-        }
-        const empty = imageSelect.querySelector("option[disabled]");
-        if (empty) empty.remove();
-        const opt = document.createElement("option");
-        opt.value = body.name;
-        opt.textContent = body.name;
-        imageSelect.append(opt);
-        imageSelect.value = body.name;
-        if (imageDeleteBtn) imageDeleteBtn.disabled = false;
-        imageFile.value = "";
-        syncGenerateEnabled();
-      } catch (err) {
-        showImageError(err.message || String(err));
-      } finally {
-        imageUploadBtn.disabled = false;
-      }
-    });
-  }
-
-  if (imageDeleteBtn && imageSelect) {
-    imageDeleteBtn.addEventListener("click", async () => {
-      clearImageError();
-      const name = imageSelect.value;
-      if (!name) return;
-      imageDeleteBtn.disabled = true;
-      try {
-        const res = await fetch("/api/images/" + encodeURIComponent(name), {
-          method: "DELETE",
-          headers: { Accept: "application/json" },
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          showImageError(body.detail || `Delete failed (${res.status})`);
-          imageDeleteBtn.disabled = false;
-          return;
-        }
-        const opt = imageSelect.querySelector('option[value="' + CSS.escape(name) + '"]');
-        if (opt) opt.remove();
-        if (!imageSelect.options.length) {
-          const placeholder = document.createElement("option");
-          placeholder.value = "";
-          placeholder.disabled = true;
-          placeholder.selected = true;
-          placeholder.textContent = "No images — upload below";
-          imageSelect.append(placeholder);
-          imageDeleteBtn.disabled = true;
-        } else {
-          imageSelect.selectedIndex = 0;
-          imageDeleteBtn.disabled = false;
-        }
-        syncGenerateEnabled();
-      } catch (err) {
-        showImageError(err.message || String(err));
-        imageDeleteBtn.disabled = false;
-      }
-    });
-  }
 
   const statusEl = document.getElementById("status");
   const errorEl = document.getElementById("error");
@@ -296,6 +210,7 @@
       voice: document.getElementById("voice").value,
       pitch: Number(document.getElementById("pitch").value),
       speed: Number(document.getElementById("speed").value),
+      video_speed: Number(document.getElementById("video_speed").value),
       ken_burns:
         currentMode === "picture" &&
         Boolean(document.getElementById("ken_burns") && document.getElementById("ken_burns").checked),

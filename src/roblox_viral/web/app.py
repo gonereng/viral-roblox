@@ -41,6 +41,7 @@ from roblox_viral.web.library import (
     delete_source,
     list_images,
     list_outputs,
+    list_roblox_sources,
     list_sources,
     save_image,
     save_upload,
@@ -149,7 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _: None = Depends(require_login),
     ) -> HTMLResponse:
         settings = request.app.state.settings
-        sources = list_sources(settings)
+        sources = list_roblox_sources(settings)
         try:
             voices = await list_english_voices()
         except Exception:

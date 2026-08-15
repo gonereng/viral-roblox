@@ -18,7 +18,7 @@
           <option value="" disabled selected>No sources — upload in Library</option>
           {% else %}
           {% for s in sources %}
-          <option value="{{ s.name }}">{{ s.name }}</option>
+          <option value="{{ s.name }}">{{ s.name }} {% if s.kind == "slice" %}(1m){% else %}(video){% endif %}</option>
           {% endfor %}
           {% endif %}
         </select>
@@ -30,7 +30,7 @@
         Source image
         <select id="image_name" name="image_name">
           {% if not images %}
-          <option value="" disabled selected>No images — upload below</option>
+          <option value="" disabled selected>No images — upload in Library</option>
           {% else %}
           {% for img in images %}
           <option value="{{ img.name }}">{{ img.name }}</option>
@@ -38,15 +38,6 @@
           {% endif %}
         </select>
       </label>
-      <div class="image-actions">
-        <label>
-          Upload image
-          <input id="image-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
-        </label>
-        <button id="image-upload-btn" type="button">Upload</button>
-        <button id="image-delete-btn" type="button"{% if not images %} disabled{% endif %}>Delete</button>
-      </div>
-      <p id="image-error" class="error" hidden></p>
       <label class="checkbox-field">
         <input id="ken_burns" name="ken_burns" type="checkbox">
         Ken Burns (slow zoom-in)
@@ -81,6 +72,11 @@
     <label class="slider-field">
       Speed <span id="speed-value">130%</span>
       <input id="speed" name="speed" type="range" min="50" max="200" step="1" value="130" />
+    </label>
+
+    <label class="slider-field" id="video-speed-field">
+      Video speed <span id="video-speed-value">100%</span>
+      <input id="video_speed" name="video_speed" type="range" min="50" max="200" step="1" value="100" />
     </label>
 
     <button id="generate-btn" type="submit"{% if not sources %} disabled{% endif %}>Generate</button>
