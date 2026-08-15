@@ -48,9 +48,17 @@ Options:
 
 ## Web app
 
-Browser UI to upload gameplay clips on **Library** (split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story prompt), and **Generate** page to pick sources, write a story, choose voice settings, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
 
-On **Generate**, switch **Roblox** (gameplay clip from Library) or **Picture** (upload a still on that tab: jpg/png/webp). Picture videos use the same story, voice, pitch, and speed; optional **Ken Burns** slowly zooms in. The greenscreen overlay applies to Roblox videos only.
+**Library** has three tabs:
+
+| Tab | Behavior |
+|-----|----------|
+| **1-minute clips** | Upload gameplay; split into complete one-minute slices (`media/sources/`) |
+| **Videos** | Upload full clips as-is, no slicing (`media/videos/`) |
+| **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
+
+On **Generate**, switch **Roblox** (pick a labeled clip from Library — `(1m)` slices or `(video)` raw) or **Picture** (pick an image from Library). Roblox mode adds a **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Picture videos support optional **Ken Burns** slow zoom. The greenscreen overlay applies to Roblox videos only.
 
 ### Local run
 
@@ -73,7 +81,7 @@ Or with auto-reload:
 uvicorn roblox_viral.web.app:create_app --factory --reload
 ```
 
-Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload a source in **Library**, then use **Generate**.
+Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload media in **Library**, then use **Generate**.
 
 Optional env vars:
 
