@@ -375,7 +375,13 @@ def test_create_job_persists_video_speed(tmp_path, monkeypatch):
         video_speed=150,
     )
     assert record.video_speed == 150
-    loaded = mgr.get(record.id, s)
+    job_id = record.id
+    status_path = s.jobs_dir / job_id / "status.json"
+    assert status_path.is_file()
+
+    cold = JobManager()
+    assert cold.get(job_id) is None
+    loaded = cold.get(job_id, s)
     assert loaded is not None
     assert loaded.video_speed == 150
 

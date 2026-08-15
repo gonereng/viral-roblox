@@ -130,6 +130,7 @@ def test_create_defaults_pitch_and_speed(tmp_path, monkeypatch):
     st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
     assert st.json()["pitch"] == 15
     assert st.json()["speed"] == 130
+    assert st.json()["video_speed"] == 100
 
 
 def test_create_accepts_video_speed(tmp_path, monkeypatch):
