@@ -217,7 +217,6 @@ def test_save_video_stores_as_is_no_slice(tmp_path, monkeypatch):
         app_password="x",
         app_secret="dev-secret-key-at-least-32-chars!!",
         require_password=False,
-        youtube_cookies="",
     )
     s.ensure_media_dirs()
     called = {"slice": False}
@@ -244,7 +243,6 @@ def test_resolve_roblox_media_sources_win(tmp_path):
         app_password="x",
         app_secret="dev-secret-key-at-least-32-chars!!",
         require_password=False,
-        youtube_cookies="",
     )
     s.ensure_media_dirs()
     (s.sources_dir / "same.mp4").write_bytes(b"slice")
@@ -263,7 +261,6 @@ def test_resolve_roblox_media_falls_back_to_videos(tmp_path):
         app_password="x",
         app_secret="dev-secret-key-at-least-32-chars!!",
         require_password=False,
-        youtube_cookies="",
     )
     s.ensure_media_dirs()
     (s.videos_dir / "only.mp4").write_bytes(b"raw")
@@ -281,7 +278,6 @@ def test_list_roblox_sources_labels_kinds(tmp_path):
         app_password="x",
         app_secret="dev-secret-key-at-least-32-chars!!",
         require_password=False,
-        youtube_cookies="",
     )
     s.ensure_media_dirs()
     (s.sources_dir / "a-1.mp4").write_bytes(b"1")

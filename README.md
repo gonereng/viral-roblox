@@ -48,7 +48,7 @@ Options:
 
 ## Web app
 
-Browser UI to upload gameplay clips or import a YouTube URL on **Library** (background job; best MP4 ≤1080p; split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI (and `yt-dlp`, installed with the package).
+Browser UI to upload gameplay clips on **Library** (split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
 
 On **Generate**, switch **Roblox** (gameplay clip from Library) or **Picture** (upload a still on that tab: jpg/png/webp). Picture videos use the same story, voice, pitch, and speed; optional **Ken Burns** slowly zooms in. The greenscreen overlay applies to Roblox videos only.
 
@@ -73,9 +73,7 @@ Or with auto-reload:
 uvicorn roblox_viral.web.app:create_app --factory --reload
 ```
 
-Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload or YouTube-import a source in **Library**, then use **Generate**.
-
-If YouTube shows a bot check (“Sign in to confirm you’re not a bot”), export cookies from a logged-in browser session to `media/youtube_cookies.txt` (Netscape format). Extensions such as “Get cookies.txt LOCALLY” work; or set `YOUTUBE_COOKIES` to that file path. Keep the file private — it authenticates as your account.
+Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload a source in **Library**, then use **Generate**.
 
 Optional env vars:
 
@@ -85,7 +83,6 @@ Optional env vars:
 | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
 | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
 | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
-| `YOUTUBE_COOKIES` | Optional path to a Netscape `cookies.txt` for YouTube imports (bot checks). If unset, `MEDIA_ROOT/youtube_cookies.txt` is used when present. |
 | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
 | `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
 

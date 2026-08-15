@@ -27,14 +27,8 @@ from roblox_viral.web.library import (
     make_output_name,
     resolve_image,
     resolve_roblox_media,
-    slice_into_minute_parts,
     validate_image_filename,
     validate_video_filename,
-)
-from roblox_viral.web.youtube import (
-    download_youtube,
-    validate_stem,
-    validate_youtube_url,
 )
 
 JobStatus = Literal[
@@ -42,8 +36,6 @@ JobStatus = Literal[
     "synthesizing",
     "captioning",
     "rendering",
-    "downloading",
-    "slicing",
     "done",
     "error",
 ]
@@ -65,7 +57,7 @@ class JobRecord:
     voice: str
     output_name: str | None
     created_at: str
-    kind: str = "render"  # "render" | "youtube"
+    kind: str = "render"
     pitch: int = DEFAULT_PITCH
     speed: int = DEFAULT_SPEED
     video_speed: int = DEFAULT_VIDEO_SPEED
@@ -156,41 +148,6 @@ class JobManager:
                     self._active_id = None
                 self._jobs.pop(job_id, None)
                 self._stories.pop(job_id, None)
-            raise
-        return record
-
-    def create_youtube(self, settings: Settings, url: str, stem: str) -> JobRecord:
-        safe_url = validate_youtube_url(url)
-        safe_stem = validate_stem(stem)
-
-        with self._lock:
-            if self._active_id is not None:
-                raise BusyError("A job is already in progress")
-            job_id = uuid.uuid4().hex
-            record = JobRecord(
-                id=job_id,
-                status="queued",
-                error=None,
-                source_name="",
-                voice="",
-                output_name=None,
-                created_at=datetime.now(timezone.utc).isoformat(),
-                kind="youtube",
-                url=safe_url,
-                stem=safe_stem,
-                created_slices=None,
-            )
-            self._jobs[job_id] = record
-            self._active_id = job_id
-
-        try:
-            (settings.jobs_dir / job_id).mkdir(parents=True, exist_ok=True)
-            self._persist(settings, record)
-        except Exception:
-            with self._lock:
-                if self._active_id == job_id:
-                    self._active_id = None
-                self._jobs.pop(job_id, None)
             raise
         return record
 
@@ -311,36 +268,6 @@ class JobManager:
             record.error = str(exc)
             self._set_status(settings, record, "error")
         finally:
-            with self._lock:
-                if self._active_id == job_id:
-                    self._active_id = None
-
-    def run_youtube_job(self, settings: Settings, job_id: str) -> None:
-        record = self._jobs.get(job_id)
-        if record is None:
-            raise KeyError(f"Unknown job: {job_id}")
-        job_dir = settings.jobs_dir / job_id
-        download_path = job_dir / "download.mp4"
-        try:
-            self._set_status(settings, record, "downloading")
-            download_youtube(
-                record.url or "",
-                download_path,
-                cookies_path=settings.youtube_cookies_path,
-            )
-
-            self._set_status(settings, record, "slicing")
-            slices = slice_into_minute_parts(
-                settings, download_path, record.stem or "video"
-            )
-            record.created_slices = [s.name for s in slices]
-            self._set_status(settings, record, "done")
-        except Exception as exc:
-            record.error = str(exc)
-            self._set_status(settings, record, "error")
-        finally:
-            download_path.unlink(missing_ok=True)
-            download_path.with_suffix("").unlink(missing_ok=True)
             with self._lock:
                 if self._active_id == job_id:
                     self._active_id = None

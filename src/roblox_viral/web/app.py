@@ -68,11 +68,6 @@ class CreateJobBody(BaseModel):
     ken_burns: bool = False
 
 
-class YoutubeImportBody(BaseModel):
-    url: str = ""
-    name: str = ""
-
-
 async def _read_upload_capped(
     file: UploadFile, max_bytes: int | None = None
 ) -> bytes:
@@ -240,32 +235,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=400,
             )
         return RedirectResponse("/library", status_code=HTTP_303_SEE_OTHER)
-
-    @app.post("/api/library/youtube")
-    async def youtube_import(
-        request: Request,
-        background_tasks: BackgroundTasks,
-        _: None = Depends(require_login),
-    ) -> dict:
-        settings = request.app.state.settings
-        mgr: JobManager = request.app.state.job_manager
-        try:
-            raw = await request.body()
-            body = YoutubeImportBody.model_validate_json(raw)
-        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-            raise HTTPException(
-                status_code=400, detail="Invalid JSON body"
-            ) from exc
-        try:
-            record = mgr.create_youtube(settings, body.url, body.name)
-        except BusyError as exc:
-            raise HTTPException(
-                status_code=HTTP_409_CONFLICT, detail=str(exc)
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        background_tasks.add_task(mgr.run_youtube_job, settings, record.id)
-        return {"id": record.id, "status": record.status}
 
     @app.get("/prompt", response_class=HTMLResponse)
     def prompt_page(

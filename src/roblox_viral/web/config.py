@@ -36,7 +36,6 @@ class Settings:
     app_secret: str
     require_password: bool = True
     gemini_api_key: str = ""
-    youtube_cookies: str = ""
     overlay_video: str = ""
     api_key: str = ""
 
@@ -65,15 +64,6 @@ class Settings:
         return self.media_root / "prompt.txt"
 
     @property
-    def youtube_cookies_path(self) -> Path | None:
-        """Netscape cookies file for yt-dlp, if configured or present under media/."""
-        if self.youtube_cookies.strip():
-            path = Path(self.youtube_cookies).expanduser()
-            return path if path.is_file() else None
-        default = self.media_root / "youtube_cookies.txt"
-        return default if default.is_file() else None
-
-    @property
     def overlay_video_path(self) -> Path | None:
         """Greenscreen intro overlay MP4, if configured or present under media/."""
         return resolve_overlay_video_path(self.media_root, self.overlay_video)
@@ -100,7 +90,6 @@ class Settings:
             secret = secrets.token_hex(32)
             warnings.warn("APP_SECRET unset; using ephemeral secret (sessions reset on restart)", stacklevel=2)
         gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
-        youtube_cookies = os.environ.get("YOUTUBE_COOKIES", "")
         overlay_video = os.environ.get("OVERLAY_VIDEO", "")
         api_key = os.environ.get("API_KEY", "")
         return cls(
@@ -109,7 +98,6 @@ class Settings:
             app_secret=secret,
             require_password=require,
             gemini_api_key=gemini_api_key,
-            youtube_cookies=youtube_cookies,
             overlay_video=overlay_video,
             api_key=api_key,
         )
