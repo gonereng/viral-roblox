@@ -555,14 +555,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             resolve_image, request.app.state.settings, name
         )
 
-    @app.get("/media/{name}")
-    def media_invalid_direct(
-        name: str,
-        request: Request,
-        _: None = Depends(require_login),
-    ) -> FileResponse:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
     return app
 
 

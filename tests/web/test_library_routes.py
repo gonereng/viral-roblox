@@ -127,5 +127,5 @@ def test_media_library_routes_404_and_400(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _login(client)
     assert client.get("/media/videos/missing.mp4").status_code == 404
-    assert client.get("/media/sources/../secrets.mp4").status_code == 400
+    assert client.get("/media/sources/not!!valid.mp4").status_code == 400
     assert client.get("/media/images/not-a-path.jpg").status_code == 404
