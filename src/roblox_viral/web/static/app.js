@@ -130,6 +130,7 @@
   const resultEl = document.getElementById("result");
   const player = document.getElementById("player");
   const download = document.getElementById("download");
+  const downloadCard = document.getElementById("download-card");
 
   let pollTimer = null;
 
@@ -154,12 +155,24 @@
     }
   }
 
-  function showResult(outputName) {
+  function showResult(outputName, titleCardName) {
     const url = `/media/outputs/${encodeURIComponent(outputName)}`;
     resultEl.hidden = false;
     player.src = url;
     download.href = url;
     download.download = outputName;
+    if (downloadCard) {
+      if (titleCardName) {
+        const cardUrl = `/media/outputs/${encodeURIComponent(titleCardName)}`;
+        downloadCard.hidden = false;
+        downloadCard.href = cardUrl;
+        downloadCard.download = titleCardName;
+      } else {
+        downloadCard.hidden = true;
+        downloadCard.removeAttribute("href");
+        downloadCard.removeAttribute("download");
+      }
+    }
     prependRecentOutput(outputName);
   }
 
@@ -206,7 +219,7 @@
       stopPolling();
       syncGenerateEnabled();
       if (job.output_name) {
-        showResult(job.output_name);
+        showResult(job.output_name, job.title_card_name || null);
       }
       return;
     }
