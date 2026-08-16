@@ -16,6 +16,21 @@ MAX_UPLOAD_BYTES = 500_000_000
 MAX_IMAGE_UPLOAD_BYTES = 20_000_000
 SLICE_SECONDS = 60
 
+_MEDIA_TYPES = {
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
+
+def media_type_for_name(name: str) -> str:
+    return _MEDIA_TYPES.get(Path(name).suffix.lower(), "application/octet-stream")
+
 
 @dataclass(frozen=True)
 class SourceVideo:

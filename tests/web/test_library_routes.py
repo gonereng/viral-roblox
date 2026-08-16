@@ -94,3 +94,38 @@ def test_library_page_has_three_tabs_and_media_lists(tmp_path, monkeypatch):
     assert "video.mp4" in response.text
     assert "image.jpg" in response.text
     assert 'src="/static/library.js"' in response.text
+
+
+def test_media_library_routes_require_auth_and_serve(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    settings = client.app.state.settings
+    settings.sources_dir.mkdir(parents=True, exist_ok=True)
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    (settings.sources_dir / "slice.mp4").write_bytes(b"slice-bytes")
+    (settings.videos_dir / "raw.mp4").write_bytes(b"raw-bytes")
+    (settings.images_dir / "pic.png").write_bytes(b"png-bytes")
+
+    for url in (
+        "/media/sources/slice.mp4",
+        "/media/videos/raw.mp4",
+        "/media/images/pic.png",
+    ):
+        unauth = client.get(url, follow_redirects=False)
+        assert unauth.status_code in (302, 303, 401)
+
+    _login(client)
+    assert client.get("/media/sources/slice.mp4").content == b"slice-bytes"
+    assert client.get("/media/videos/raw.mp4").content == b"raw-bytes"
+    img = client.get("/media/images/pic.png")
+    assert img.status_code == 200
+    assert img.content == b"png-bytes"
+    assert "image/png" in img.headers.get("content-type", "")
+
+
+def test_media_library_routes_404_and_400(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _login(client)
+    assert client.get("/media/videos/missing.mp4").status_code == 404
+    assert client.get("/media/sources/../secrets.mp4").status_code == 400
+    assert client.get("/media/images/not-a-path.jpg").status_code == 404

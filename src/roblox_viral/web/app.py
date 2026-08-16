@@ -44,6 +44,10 @@ from roblox_viral.web.library import (
     list_outputs,
     list_sources,
     list_videos,
+    media_type_for_name,
+    resolve_image,
+    resolve_source,
+    resolve_video,
     save_image,
     save_upload,
     save_video,
@@ -507,6 +511,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Not found")
         return FileResponse(path, media_type="video/mp4", filename=safe)
+
+    def _library_media_response(resolve, settings: Settings, name: str) -> FileResponse:
+        try:
+            path = resolve(settings, name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(
+            path,
+            media_type=media_type_for_name(path.name),
+            filename=path.name,
+        )
+
+    @app.get("/media/sources/{name}")
+    def media_source(
+        name: str,
+        request: Request,
+        _: None = Depends(require_login),
+    ) -> FileResponse:
+        return _library_media_response(
+            resolve_source, request.app.state.settings, name
+        )
+
+    @app.get("/media/videos/{name}")
+    def media_video(
+        name: str,
+        request: Request,
+        _: None = Depends(require_login),
+    ) -> FileResponse:
+        return _library_media_response(
+            resolve_video, request.app.state.settings, name
+        )
+
+    @app.get("/media/images/{name}")
+    def media_image(
+        name: str,
+        request: Request,
+        _: None = Depends(require_login),
+    ) -> FileResponse:
+        return _library_media_response(
+            resolve_image, request.app.state.settings, name
+        )
+
+    @app.get("/media/{name}")
+    def media_invalid_direct(
+        name: str,
+        request: Request,
+        _: None = Depends(require_login),
+    ) -> FileResponse:
+        raise HTTPException(status_code=400, detail="Invalid path")
 
     return app
 
