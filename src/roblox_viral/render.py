@@ -170,6 +170,8 @@ def render_video(
     work_dir: Path | str | None = None,
     overlay_path: Path | str | None = None,
     video_speed: int = 100,
+    title_card_path: Path | str | None = None,
+    title_card_until_s: float | None = None,
 ) -> Path:
     """
     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
@@ -201,6 +203,14 @@ def render_video(
         if not overlay.is_file():
             raise RenderError(f"Overlay video not found: {overlay}")
 
+    title_card: Path | None = None
+    if title_card_path is not None:
+        title_card = Path(title_card_path)
+        if not title_card.is_file():
+            raise RenderError(f"Title card not found: {title_card}")
+        if title_card_until_s is None or title_card_until_s <= 0:
+            raise RenderError("title_card_until_s must be greater than 0")
+
     out.parent.mkdir(parents=True, exist_ok=True)
     if work_dir is not None:
         Path(work_dir).mkdir(parents=True, exist_ok=True)
@@ -209,7 +219,7 @@ def render_video(
     ass_escaped = _ass_filter_path(ass)
     setpts = _playback_setpts(video_speed)
 
-    if overlay is None:
+    if overlay is None and title_card is None:
         parts = [
             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
@@ -250,7 +260,7 @@ def render_video(
             "+faststart",
             str(out),
         ]
-    else:
+    elif overlay is not None and title_card is None:
         base_parts = [
             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
@@ -282,6 +292,71 @@ def render_video(
             f"{audio_duration:.3f}",
             "-filter_complex",
             fc,
+            "-map",
+            "[outv]",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(out),
+        ]
+    else:
+        base_parts = [
+            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+        ]
+        if setpts:
+            base_parts.append(setpts)
+        base = ",".join(base_parts)
+
+        inputs = [
+            ffmpeg,
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(video),
+            "-i",
+            str(audio),
+        ]
+        filter_parts = [f"[0:v]{base}[base]", f"[base]ass='{ass_escaped}'[cap]"]
+        title_input_index = 2
+        title_base = "[cap]"
+        if overlay is not None:
+            inputs.extend(["-t", f"{OVERLAY_DURATION_S}", "-i", str(overlay)])
+            filter_parts.extend(
+                [
+                    f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
+                    f"format=yuva420p,scale={OVERLAY_MAX_W}:{OVERLAY_MAX_H}:"
+                    "force_original_aspect_ratio=decrease[ov]",
+                    f"[cap][ov]overlay=(W-w)/2:(H-h)/2:"
+                    f"enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[with_overlay]",
+                ]
+            )
+            title_input_index = 3
+            title_base = "[with_overlay]"
+
+        inputs.extend(["-i", str(title_card)])
+        filter_parts.append(
+            f"{title_base}[{title_input_index}:v]"
+            f"overlay=(W-w)/2:(H/2-h):enable='lte(t,{title_card_until_s:.3f})'[outv]"
+        )
+        cmd = inputs + [
+            "-t",
+            f"{audio_duration:.3f}",
+            "-filter_complex",
+            ";".join(filter_parts),
             "-map",
             "[outv]",
             "-map",

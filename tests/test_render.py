@@ -98,6 +98,88 @@ def test_render_video_with_overlay_uses_filter_complex(tmp_path, monkeypatch):
     assert "1:a:0" in seen["cmd"]
 
 
+def test_render_video_title_card_overlay_enable(tmp_path, monkeypatch):
+    video = _touch(tmp_path / "game.mp4")
+    audio = _touch(tmp_path / "n.mp3")
+    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+    card = _touch(tmp_path / "card.png")
+    out = tmp_path / "out.mp4"
+    seen = {}
+
+    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        seen["cmd"] = cmd
+        out.write_bytes(b"mp4")
+
+        class R:
+            returncode = 0
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+
+    render_video(
+        video_path=video,
+        audio_path=audio,
+        ass_path=ass,
+        output_path=out,
+        title_card_path=card,
+        title_card_until_s=1.25,
+        overlay_path=None,
+    )
+
+    cmd = seen["cmd"]
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    assert "[0:v]scale=1080:1920:force_original_aspect_ratio=increase" in fc
+    assert "[base]ass=" in fc
+    assert "[cap][2:v]overlay=(W-w)/2:(H/2-h):enable='lte(t,1.250)'[outv]" in fc
+    assert cmd[cmd.index(str(card)) - 1] == "-i"
+    assert cmd.index(str(card)) > cmd.index(str(audio))
+    assert cmd[cmd.index("-map") + 1] == "[outv]"
+    assert "1:a:0" in cmd
+
+
+@pytest.mark.parametrize("until_s", [None, 0, -0.1])
+def test_render_video_title_card_requires_positive_duration(
+    tmp_path, monkeypatch, until_s
+):
+    video = _touch(tmp_path / "game.mp4")
+    audio = _touch(tmp_path / "n.mp3")
+    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+    card = _touch(tmp_path / "card.png")
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    with pytest.raises(RenderError, match="title_card_until_s"):
+        render_video(
+            video_path=video,
+            audio_path=audio,
+            ass_path=ass,
+            output_path=tmp_path / "out.mp4",
+            title_card_path=card,
+            title_card_until_s=until_s,
+        )
+
+
+def test_render_video_missing_title_card_path_raises(tmp_path, monkeypatch):
+    video = _touch(tmp_path / "game.mp4")
+    audio = _touch(tmp_path / "n.mp3")
+    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    with pytest.raises(RenderError, match="Title card"):
+        render_video(
+            video_path=video,
+            audio_path=audio,
+            ass_path=ass,
+            output_path=tmp_path / "out.mp4",
+            title_card_path=tmp_path / "missing.png",
+            title_card_until_s=1,
+        )
+
+
 def test_render_video_missing_overlay_path_raises(tmp_path, monkeypatch):
     video = _touch(tmp_path / "game.mp4")
     audio = _touch(tmp_path / "n.mp3")
