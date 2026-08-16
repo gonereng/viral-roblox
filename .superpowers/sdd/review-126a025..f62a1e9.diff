@@ -1,0 +1,157 @@
+# Review package: 126a0258c882d39d0d6b49b3193ab6d131998649..f62a1e95031e968502dd8ffdde3264425de714b0
+
+## Commits
+f62a1e9 feat: scale Reddit title card layout ~2x
+
+## Files changed
+ src/roblox_viral/reddit_card.py | 30 +++++++++++++++---------------
+ tests/test_reddit_card.py       | 13 ++++++++++++-
+ 2 files changed, 27 insertions(+), 16 deletions(-)
+
+## Diff
+diff --git a/src/roblox_viral/reddit_card.py b/src/roblox_viral/reddit_card.py
+index 3feecd2..8cb868f 100644
+--- a/src/roblox_viral/reddit_card.py
++++ b/src/roblox_viral/reddit_card.py
+@@ -6,26 +6,26 @@ from pathlib import Path
+ 
+ from PIL import Image, ImageDraw, ImageFont
+ 
+ from roblox_viral.captions import partition_words_by_sentences
+ from roblox_viral.voice import WordTiming
+ 
+ DEFAULT_REDDIT_USERNAME = "Resident_Vehicle2780"
+ CARD_WIDTH = 972
+ CARD_BG = (26, 26, 27, 255)
+ 
+-_PADDING = 24
+-_AVATAR_SIZE = 40
+-_HEADER_HEIGHT = 40
+-_TITLE_GAP = 18
+-_BOTTOM_PADDING = 28
+-_TITLE_SPACING = 8
++_PADDING = 48
++_AVATAR_SIZE = 80
++_HEADER_HEIGHT = 80
++_TITLE_GAP = 36
++_BOTTOM_PADDING = 56
++_TITLE_SPACING = 16
+ 
+ 
+ def first_sentence_end_s(
+     sentences: list[str],
+     words: list[WordTiming],
+     *,
+     fallback_s: float = 2.0,
+ ) -> float:
+     """Return the first sentence's end time in seconds."""
+     groups = partition_words_by_sentences(sentences, words)
+@@ -91,51 +91,51 @@ def render_reddit_card(
+     avatar_path: Path | str | None = None,
+ ) -> Path:
+     """Write a Reddit-style RGBA PNG and return its path."""
+     avatar_file = (
+         Path(avatar_path)
+         if avatar_path is not None
+         else Path(__file__).parent / "assets" / "reddit_avatar.png"
+     )
+     avatar = _load_avatar(avatar_file)
+ 
+-    username_font = _font(19, bold=True)
+-    meta_font = _font(18)
+-    title_font = _font(34, bold=True)
++    username_font = _font(38, bold=True)
++    meta_font = _font(36)
++    title_font = _font(68, bold=True)
+     lines = _wrap_text(title, title_font, CARD_WIDTH - 2 * _PADDING)
+     title_bbox = title_font.getbbox("Ag")
+     line_height = title_bbox[3] - title_bbox[1]
+     title_height = max(line_height, len(lines) * line_height + (len(lines) - 1) * _TITLE_SPACING)
+     card_height = (
+         _PADDING + _HEADER_HEIGHT + _TITLE_GAP + title_height + _BOTTOM_PADDING
+     )
+ 
+     image = Image.new("RGBA", (CARD_WIDTH, card_height), CARD_BG)
+     draw = ImageDraw.Draw(image)
+     image.alpha_composite(avatar, (_PADDING, _PADDING))
+ 
+-    header_x = _PADDING + _AVATAR_SIZE + 12
+-    header_y = _PADDING + 9
++    header_x = _PADDING + _AVATAR_SIZE + 24
++    header_y = _PADDING + 18
+     draw.text((header_x, header_y), username, font=username_font, fill="white")
+     username_width = draw.textlength(username, font=username_font)
+     draw.text(
+-        (header_x + username_width + 10, header_y + 1),
++        (header_x + username_width + 20, header_y + 2),
+         "3d",
+         font=meta_font,
+         fill=(129, 131, 132, 255),
+     )
+ 
+-    menu_x = CARD_WIDTH - _PADDING - 4
++    menu_x = CARD_WIDTH - _PADDING - 8
+     menu_y = _PADDING + _HEADER_HEIGHT // 2
+-    for offset in (-7, 0, 7):
++    for offset in (-14, 0, 14):
+         draw.ellipse(
+-            (menu_x - 2, menu_y + offset - 2, menu_x + 2, menu_y + offset + 2),
++            (menu_x - 4, menu_y + offset - 4, menu_x + 4, menu_y + offset + 4),
+             fill=(215, 218, 220, 255),
+         )
+ 
+     title_y = _PADDING + _HEADER_HEIGHT + _TITLE_GAP
+     draw.multiline_text(
+         (_PADDING, title_y),
+         "\n".join(lines),
+         font=title_font,
+         fill="white",
+         spacing=_TITLE_SPACING,
+diff --git a/tests/test_reddit_card.py b/tests/test_reddit_card.py
+index bbff543..2037fff 100644
+--- a/tests/test_reddit_card.py
++++ b/tests/test_reddit_card.py
+@@ -1,18 +1,29 @@
+ """Tests for Reddit title-card rendering and timing."""
+ 
+ from PIL import Image
+ 
++from roblox_viral import reddit_card as rc
+ from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
+ from roblox_viral.voice import WordTiming
+ 
+ 
++def test_reddit_card_layout_constants_are_scaled():
++    assert rc.CARD_WIDTH == 972
++    assert rc._AVATAR_SIZE == 80
++    assert rc._PADDING == 48
++    assert rc._HEADER_HEIGHT == 80
++    assert rc._TITLE_GAP == 36
++    assert rc._BOTTOM_PADDING == 56
++    assert rc._TITLE_SPACING == 16
++
++
+ def test_first_sentence_end_s():
+     sentences = ["Hello world.", "Second line."]
+     words = [
+         WordTiming("Hello", 0, 200),
+         WordTiming("world.", 200, 500),
+         WordTiming("Second", 500, 800),
+         WordTiming("line.", 800, 1000),
+     ]
+ 
+     assert abs(first_sentence_end_s(sentences, words) - 0.5) < 1e-6
+@@ -23,12 +34,12 @@ def test_first_sentence_end_s_fallback_empty_words():
+ 
+ 
+ def test_render_reddit_card_writes_png(tmp_path):
+     out = tmp_path / "card.png"
+ 
+     path = render_reddit_card("Company copied my code after refusing to pay.", out)
+ 
+     assert path.is_file()
+     with Image.open(path) as image:
+         assert image.size[0] == 972
+-        assert image.size[1] > 80
++        assert image.size[1] > 160  # taller than old ~80+ header
+         assert image.mode in ("RGBA", "RGB")

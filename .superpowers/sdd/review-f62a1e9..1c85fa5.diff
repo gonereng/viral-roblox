@@ -1,0 +1,356 @@
+# Review package: f62a1e95031e968502dd8ffdde3264425de714b0..1c85fa5b64dc63717076a84676566e91e2228042
+
+## Commits
+1c85fa5 feat(web): persist and serve Reddit title card PNG downloads
+
+## Files changed
+ src/roblox_viral/web/app.py  |   6 ++-
+ src/roblox_viral/web/jobs.py |  12 ++++-
+ tests/web/test_api.py        |  12 +++++
+ tests/web/test_jobs.py       | 112 +++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 140 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index 07507ef..5ece17f 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -503,21 +503,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+     ) -> FileResponse:
+         settings = request.app.state.settings
+         safe = Path(name).name
+         if safe != name or not safe:
+             raise HTTPException(status_code=400, detail="Invalid filename")
+         path = (settings.outputs_dir / safe).resolve()
+         if not path.is_relative_to(settings.outputs_dir.resolve()):
+             raise HTTPException(status_code=400, detail="Invalid path")
+         if not path.is_file():
+             raise HTTPException(status_code=404, detail="Not found")
+-        return FileResponse(path, media_type="video/mp4", filename=safe)
++        return FileResponse(
++            path,
++            media_type=media_type_for_name(safe),
++            filename=safe,
++        )
+ 
+     def _library_media_response(resolve, settings: Settings, name: str) -> FileResponse:
+         try:
+             path = resolve(settings, name)
+         except ValueError as exc:
+             raise HTTPException(status_code=400, detail=str(exc)) from exc
+         except FileNotFoundError:
+             raise HTTPException(status_code=404, detail="Not found")
+         return FileResponse(
+             path,
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index 76061a5..5eb1c7e 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -1,14 +1,15 @@
+ from __future__ import annotations
+ 
+ import json
+ import re
++import shutil
+ import threading
+ import uuid
+ from dataclasses import asdict, dataclass
+ from datetime import datetime, timezone
+ from typing import Literal
+ 
+ from pathlib import Path
+ 
+ from roblox_viral.captions import write_ass
+ from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
+@@ -75,20 +76,21 @@ class JobRecord:
+     kind: str = "render"
+     pitch: int = DEFAULT_PITCH
+     speed: int = DEFAULT_SPEED
+     video_speed: int = DEFAULT_VIDEO_SPEED
+     mode: str = "single"  # "single" | "picture" | "reddit"
+     ken_burns: bool = False
+     url: str | None = None
+     stem: str | None = None
+     created_slices: list[str] | None = None
+     ephemeral: bool = False
++    title_card_name: str | None = None
+ 
+ 
+ class JobManager:
+     """In-memory job store with single-flight pipeline execution."""
+ 
+     def __init__(self) -> None:
+         self._lock = threading.Lock()
+         self._active_id: str | None = None
+         self._jobs: dict[str, JobRecord] = {}
+         self._stories: dict[str, str] = {}
+@@ -200,20 +202,21 @@ class JobManager:
+                 speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
+                 video_speed=int(data["video_speed"])
+                 if "video_speed" in data
+                 else DEFAULT_VIDEO_SPEED,
+                 mode=normalize_mode(str(data.get("mode") or "single")),
+                 ken_burns=bool(data.get("ken_burns", False)),
+                 url=data.get("url"),
+                 stem=data.get("stem"),
+                 created_slices=data.get("created_slices"),
+                 ephemeral=bool(data.get("ephemeral", False)),
++                title_card_name=data.get("title_card_name"),
+             )
+         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+             return None
+ 
+         if record.id != job_id or not _SAFE_JOB_ID.fullmatch(record.id):
+             return None
+ 
+         with self._lock:
+             existing = self._jobs.get(job_id)
+             if existing is not None:
+@@ -266,23 +269,25 @@ class JobManager:
+                     raise FileNotFoundError(record.source_name)
+             elif record.mode == "picture":
+                 media_path = resolve_image(settings, record.source_name)
+             elif record.mode == "reddit":
+                 videos = [video.path for video in list_videos(settings)]
+                 durations = {
+                     video_path: probe_duration_seconds(video_path)
+                     for video_path in videos
+                 }
+                 narration_duration = probe_duration_seconds(narration_path)
++                # setpts shortens wall-clock playback; plan enough source to cover audio
++                plan_target = narration_duration * (record.video_speed / 100.0)
+                 segments = plan_reddit_clips(
+                     videos,
+-                    narration_duration,
++                    plan_target,
+                     durations=durations,
+                 )
+                 media_path = job_dir / "reddit_bg.mp4"
+                 build_reddit_background(
+                     segments,
+                     media_path,
+                     work_dir=job_dir,
+                 )
+             else:
+                 media_path = resolve_source(settings, record.source_name)
+@@ -306,20 +311,25 @@ class JobManager:
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     work_dir=job_dir,
+                     overlay_path=overlay_path,
+                     title_card_path=title_card_path,
+                     title_card_until_s=title_card_until_s,
+                     video_speed=record.video_speed,
+                 )
+ 
+             record.output_name = output_name
++            if record.mode == "reddit" and title_card_path is not None:
++                card_out_name = f"{Path(output_name).stem}-card.png"
++                settings.outputs_dir.mkdir(parents=True, exist_ok=True)
++                shutil.copy2(title_card_path, settings.outputs_dir / card_out_name)
++                record.title_card_name = card_out_name
+             self._set_status(settings, record, "done")
+         except Exception as exc:
+             record.error = str(exc)
+             self._set_status(settings, record, "error")
+         finally:
+             with self._lock:
+                 if self._active_id == job_id:
+                     self._active_id = None
+ 
+     def _set_status(
+diff --git a/tests/web/test_api.py b/tests/web/test_api.py
+index 7ec475c..92d2a37 100644
+--- a/tests/web/test_api.py
++++ b/tests/web/test_api.py
+@@ -195,20 +195,32 @@ def test_media_output_requires_auth_and_serves_file(tmp_path, monkeypatch):
+ 
+     unauth = c.get("/media/outputs/out.mp4", follow_redirects=False)
+     assert unauth.status_code in (302, 303, 401)
+ 
+     _login(c)
+     r = c.get("/media/outputs/out.mp4")
+     assert r.status_code == 200
+     assert r.content == b"video-bytes"
+ 
+ 
++def test_media_output_serves_png(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    settings = c.app.state.settings
++    settings.outputs_dir.mkdir(parents=True, exist_ok=True)
++    (settings.outputs_dir / "story-card.png").write_bytes(b"png-bytes")
++    r = c.get("/media/outputs/story-card.png")
++    assert r.status_code == 200
++    assert r.content == b"png-bytes"
++    assert "image/png" in r.headers.get("content-type", "")
++
++
+ def test_generate_page_lists_recent_outputs(tmp_path, monkeypatch):
+     async def fake_voices():
+         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+ 
+     monkeypatch.setattr(
+         "roblox_viral.web.app.list_english_voices", fake_voices
+     )
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
+     settings = c.app.state.settings
+diff --git a/tests/web/test_jobs.py b/tests/web/test_jobs.py
+index 7a61833..3a7dc71 100644
+--- a/tests/web/test_jobs.py
++++ b/tests/web/test_jobs.py
+@@ -539,20 +539,73 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
+     assert durations == {videos[0]: 8.0, videos[1]: 8.0}
+     assert seen["build"] == (["planned-segment"], reddit_bg, s.jobs_dir / job.id)
+     assert seen["render"]["video_path"] == reddit_bg
+     assert seen["render"]["overlay_path"] is None
+     assert str(seen["render"]["title_card_path"]).endswith("reddit_card.png")
+     assert seen["render"]["title_card_until_s"] > 0
+     assert seen["render"]["video_speed"] == job.video_speed
+     assert mgr.get(job.id, s).status == "done"
+ 
+ 
++def test_run_reddit_scales_plan_target_by_video_speed(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    (s.videos_dir / "one.mp4").write_bytes(b"vid")
++    mgr = JobManager()
++    seen = {}
++
++    def fake_synthesize(self, text, output_path):
++        Path(output_path).write_bytes(b"mp3")
++        return [WordTiming("One", 0, 100)]
++
++    def fake_write_ass(words, ass_path, sentences=None):
++        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
++
++    def fake_probe(path):
++        return 12.0 if Path(path).name == "narration.mp3" else 8.0
++
++    def fake_plan(paths, target_seconds, *, durations):
++        seen["target_seconds"] = target_seconds
++        return ["planned-segment"]
++
++    def fake_build(segments, output_path, *, work_dir=None):
++        Path(output_path).write_bytes(b"background")
++
++    def fake_render_video(**kwargs):
++        Path(kwargs["output_path"]).write_bytes(b"mp4")
++
++    monkeypatch.setattr(
++        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
++    monkeypatch.setattr(
++        jobs_module, "probe_duration_seconds", fake_probe, raising=False
++    )
++    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
++    monkeypatch.setattr(
++        jobs_module, "build_reddit_background", fake_build, raising=False
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
++
++    job = mgr.create(
++        s,
++        "",
++        "One line only here.\n",
++        "en-US-EmmaNeural",
++        mode="reddit",
++        video_speed=200,
++    )
++    mgr.run_job(s, job.id)
++
++    assert seen["target_seconds"] == 24.0
++    assert mgr.get(job.id, s).status == "done"
++
++
+ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     (s.videos_dir / "one.mp4").write_bytes(b"vid")
+     mgr = JobManager()
+     seen = {}
+ 
+     def fake_synthesize(self, text, output_path):
+         Path(output_path).write_bytes(b"mp3")
+         return [WordTiming("One", 0, 500)]
+ 
+@@ -602,20 +655,79 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
+     mgr.run_job(s, job.id)
+ 
+     assert seen["card"][0] == "First sentence here."
+     assert seen["card"][1] == s.jobs_dir / job.id / "reddit_card.png"
+     assert seen["render"]["overlay_path"] is None
+     assert str(seen["render"]["title_card_path"]).endswith("reddit_card.png")
+     assert seen["render"]["title_card_until_s"] == 0.5
+     assert mgr.get(job.id, s).status == "done"
+ 
+ 
++def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    (s.videos_dir / "one.mp4").write_bytes(b"vid")
++    mgr = JobManager()
++
++    def fake_synthesize(self, text, output_path):
++        Path(output_path).write_bytes(b"mp3")
++        return [WordTiming("One", 0, 500)]
++
++    def fake_write_ass(words, ass_path, sentences=None):
++        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
++
++    def fake_probe(path):
++        return 12.0 if Path(path).name == "narration.mp3" else 8.0
++
++    def fake_plan(paths, target_seconds, *, durations):
++        return ["planned-segment"]
++
++    def fake_build(segments, output_path, *, work_dir=None):
++        Path(output_path).write_bytes(b"background")
++
++    def fake_render_reddit_card(title, output_path):
++        Path(output_path).write_bytes(b"png-card")
++
++    def fake_render_video(**kwargs):
++        Path(kwargs["output_path"]).write_bytes(b"mp4")
++
++    monkeypatch.setattr(
++        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
++    monkeypatch.setattr(
++        jobs_module, "probe_duration_seconds", fake_probe, raising=False
++    )
++    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
++    monkeypatch.setattr(
++        jobs_module, "build_reddit_background", fake_build, raising=False
++    )
++    monkeypatch.setattr(
++        jobs_module, "render_reddit_card", fake_render_reddit_card, raising=False
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
++
++    job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
++    mgr.run_job(s, job.id)
++
++    job = mgr.get(job.id, s)
++    assert job is not None
++    assert job.title_card_name is not None
++    assert job.title_card_name.endswith("-card.png")
++    card_path = s.outputs_dir / job.title_card_name
++    assert card_path.is_file()
++    assert card_path.read_bytes() == b"png-card"
++
++    loaded = JobManager().get(job.id, s)
++    assert loaded is not None
++    assert loaded.title_card_name == job.title_card_name
++
++
+ def test_run_single_still_uses_greenscreen(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     mgr = JobManager()
+     seen = {}
+ 
+     def fake_synthesize(self, text, output_path):
+         Path(output_path).write_bytes(b"mp3")
+         return [WordTiming("One", 0, 100)]
+ 
+     def fake_write_ass(words, ass_path, sentences=None):

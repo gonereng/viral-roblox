@@ -1,0 +1,4261 @@
+=== COMMITS ===
+d615319 docs: document library tabs and video_speed
+0dae161 feat(api): optional video_speed and raw library source_name for n8n
+f001181 feat(web): Library tabs for slices, raw videos, and images
+ab946b6 feat(web): remove YouTube library import and yt-dlp
+429aaf9 test(web): update Generate picture controls for Library-only images
+3078897 feat(web): Generate video_speed slider and labeled roblox sources
+3d52243 feat(web): persist and apply job video_speed for Roblox renders
+fc88918 feat(web): add media/videos library helpers for raw uploads
+3820b08 feat: apply optional setpts for gameplay video_speed
+6a7beaa feat(api): optional pitch/speed on n8n create; add implementation plan
+
+=== STAT ===
+ .superpowers/sdd/task-4-report.md                  | 124 ++-
+ README.md                                          |  23 +-
+ .../plans/2026-08-15-library-tabs-video-speed.md   | 861 +++++++++++++++++++++
+ pyproject.toml                                     |   1 -
+ scripts/test-n8n-api.ps1                           |   3 +
+ src/roblox_viral/render.py                         |  34 +-
+ src/roblox_viral/voice.py                          |  13 +
+ src/roblox_viral/web/api_v1.py                     |  38 +-
+ src/roblox_viral/web/app.py                        | 134 ++--
+ src/roblox_viral/web/config.py                     |  24 +-
+ src/roblox_viral/web/jobs.py                       |  91 +--
+ src/roblox_viral/web/library.py                    |  76 ++
+ src/roblox_viral/web/static/app.js                 | 103 +--
+ src/roblox_viral/web/static/library.js             | 149 ++--
+ src/roblox_viral/web/templates/generate.html       |  18 +-
+ src/roblox_viral/web/templates/library.html        | 160 ++--
+ src/roblox_viral/web/youtube.py                    | 122 ---
+ tests/test_render.py                               |  95 +++
+ tests/test_voice.py                                |  20 +
+ tests/web/test_api.py                              |  65 +-
+ tests/web/test_api_v1.py                           | 120 +++
+ tests/web/test_config.py                           |  21 -
+ tests/web/test_jobs.py                             |  64 ++
+ tests/web/test_library.py                          |  81 ++
+ tests/web/test_library_routes.py                   |  77 ++
+ tests/web/test_youtube.py                          | 126 ---
+ tests/web/test_youtube_api.py                      |  74 --
+ tests/web/test_youtube_jobs.py                     |  58 --
+ tests/web/test_youtube_removed.py                  |  24 +
+ 29 files changed, 1927 insertions(+), 872 deletions(-)
+
+=== DIFF ===
+diff --git a/.superpowers/sdd/task-4-report.md b/.superpowers/sdd/task-4-report.md
+index 9096435..46b81dd 100644
+--- a/.superpowers/sdd/task-4-report.md
++++ b/.superpowers/sdd/task-4-report.md
+@@ -1,104 +1,84 @@
+-# Task 4 Report: Image HTTP API and job `mode` on `/api/jobs`
++# Task 4 Report: Generate UI — labeled sources, video speed slider, drop image upload
+ 
+-## Status: DONE
++**Date:** 2026-08-15  
++**Status:** DONE
+ 
+ ## Summary
+ 
+-Added authenticated `POST/DELETE /api/images`, extended `CreateJobBody` with `mode` and `ken_burns`, wired them into `JobManager.create`, and SSR `images` on the Generate page.
++Updated Generate page to list Roblox sources via `list_roblox_sources` with `(1m)` / `(video)` labels, added a video speed slider (Roblox tab only) wired into job POST as `video_speed`, and removed image upload/delete controls from Picture mode (select + Ken Burns only; empty state points to Library).
+ 
+-## TDD Evidence
++## Implementation
+ 
+-### RED (Step 2)
++### `generate.html`
+ 
+-Command:
++- Source `<option>` labels: `(1m)` for slices, `(video)` for raw videos
++- Picture empty state: `No images — upload in Library`
++- Removed upload file input, Upload/Delete buttons, and image error paragraph
++- Added `#video_speed` range slider (50–200, default 100) after voice speed
+ 
+-```
+-python -m pytest tests/web/test_api.py::test_image_upload_requires_auth \
+-  tests/web/test_api.py::test_image_upload_list_on_generate_and_delete \
+-  tests/web/test_api.py::test_image_upload_rejects_oversize_and_type \
+-  tests/web/test_api.py::test_create_picture_job \
+-  tests/web/test_api.py::test_create_job_mode_source_mismatch_400 \
+-  tests/web/test_api.py::test_create_roblox_job_ignores_ken_burns -v
+-```
+-
+-Result: **5 failed, 1 passed**
+-
+-| Test | Failure | Expected reason |
+-|------|---------|-----------------|
+-| `test_image_upload_requires_auth` | 404 != 401 | Route missing |
+-| `test_image_upload_list_on_generate_and_delete` | 404 != 200 | Route missing |
+-| `test_image_upload_rejects_oversize_and_type` | 404 != 400 | Route missing |
+-| `test_create_picture_job` | 400 != 200 | `mode` not passed to create |
+-| `test_create_job_mode_source_mismatch_400` | 200 != 400 on picture+video | mode validation not wired |
+-| `test_create_roblox_job_ignores_ken_burns` | PASSED | accidental (default `ken_burns=False`) |
++### `app.js`
+ 
+-### GREEN (Step 4)
++- Sync `#video-speed-value` with slider input
++- `setMode`: hide `#video-speed-field` in Picture, show in Roblox
++- Job POST payload includes `video_speed: Number(...)`
++- Removed image upload/delete fetch handlers and related helpers
+ 
+-Command:
++### `app.py`
+ 
+-```
+-python -m pytest tests/web/test_api.py tests/web/test_jobs.py -v
+-```
++- `generate_page`: `sources = list_roblox_sources(settings)`
+ 
+-Result: **33 passed**
++## Verification
+ 
+-Full suite:
+-
+-```
+-python -m pytest -v
++```text
++pytest tests/web/test_api.py::test_generate_page_lists_sources_and_default_voice -q  PASSED
++pytest tests/web/test_api.py::test_image_upload_list_on_generate_and_delete -q   PASSED
++pytest tests/web/test_api.py::test_generate_page_has_picture_tab_controls -q       FAILED (expects removed upload/delete IDs)
+ ```
+ 
+-Result: **100 passed, 2 skipped**
+-
+-## Changes
+-
+-### `src/roblox_viral/web/app.py`
+-
+-- Import `save_image`, `delete_image`, `list_images`
+-- `CreateJobBody`: add `mode: str = "roblox"`, `ken_burns: bool = False`
+-- `generate_page`: pass `images=list_images(settings)` via `TemplateResponse`
+-- `create_job`: pass `mode=body.mode`, `ken_burns=body.ken_burns` to `mgr.create`
+-- `POST /api/images`: multipart upload capped by `MAX_IMAGE_UPLOAD_BYTES`
+-- `DELETE /api/images/{name}`: 404 missing, 400 bad name
+-
+-### `tests/web/test_api.py`
+-
+-- 6 new tests per brief (auth, upload/list/delete, oversize/type, picture job, mode mismatch, ken_burns ignored)
++Manual checks: template renders labeled options, video speed field present, Picture block has no upload UI, `app.js` posts `video_speed`.
+ 
+ ## Commit
+ 
+-```
+-250a45e feat(web): image upload API and picture job mode
++```text
++3078897 feat(web): Generate video_speed slider and labeled roblox sources
+ ```
+ 
+-## Self-Review
++Files: `generate.html`, `app.js`, `app.py`
+ 
+-- All brief interfaces implemented and tested.
+-- Existing job tests without `mode` still pass (backward compatible defaults).
+-- Auth enforced on image routes via `require_login`.
+-- Oversize/type errors surface as 400; missing delete returns 404.
++## Brief Checklist
+ 
+-## Concerns
++| Requirement | Status |
++|-------------|--------|
++| Labeled source options `(1m)` / `(video)` | ✓ |
++| `list_roblox_sources` on generate page | ✓ |
++| Video speed slider after voice speed | ✓ |
++| Hidden in Picture mode | ✓ |
++| POST includes `video_speed` | ✓ |
++| No image upload/delete on Generate | ✓ |
+ 
+-1. **Generate SSR workaround**: Brief specifies `TemplateResponse` with `images` in context, but `generate.html` has no image loop until Task 5. To satisfy `test_image_upload_list_on_generate_and_delete` within Task 4 file scope, `generate_page` renders the template then injects hidden `<span class="image-ssr">` markers before `</main>`. Task 5 should replace this with proper template markup and remove the injection.
++## Concerns / Follow-ups
+ 
+-2. **Minor brief deviation**: Uses `HTMLResponse` + manual render instead of returning `TemplateResponse` directly, solely to support the SSR injection above.
++- ~~`test_generate_page_has_picture_tab_controls` still asserts `image-file` / `image-delete-btn`; update in a follow-up test pass (out of Task 4 file scope).~~ Fixed — see Review fix below.
+ 
+-## Review Fix (post-250a45e)
++## Review fix (Task 4 blocking finding)
+ 
+-**What changed**
++Updated `test_generate_page_has_picture_tab_controls` to match Library-only image upload:
+ 
+-- `app.py`: Restored normal `TemplateResponse` with `"images": list_images(settings)`; removed manual `get_template().render()` and hidden-span injection before `</main>`.
+-- `generate.html`: Added minimal `<section class="image-list">` that loops `images` and outputs each `img.name` (no tabs, Ken Burns, or upload/delete UI).
++- Asserts tabs, `image_name`, listed image, `ken_burns` still present
++- Asserts `image-file`, `image-upload-btn`, `image-delete-btn` are **absent**
++- Empty-state GET (no images): `No images — upload in Library`; page does not say "upload below"
++- With seeded Roblox source: `#video_speed` present; `(video)` or `(1m)` label on source option
+ 
+-**Covering tests:** all 19 tests in `tests/web/test_api.py`
++```text
++pytest tests/web/test_api.py -k "picture_tab or generate_page or video_speed" -v
+ 
+-**Command:**
++tests/web/test_api.py::test_generate_page_lists_recent_outputs PASSED
++tests/web/test_api.py::test_generate_page_lists_sources_and_default_voice PASSED
++tests/web/test_api.py::test_generate_page_has_picture_tab_controls PASSED
++tests/web/test_api.py::test_api_jobs_accepts_video_speed PASSED
++tests/web/test_api.py::test_api_jobs_rejects_video_speed PASSED
+ 
++5 passed, 17 deselected in 1.15s
+ ```
+-python -m pytest tests/web/test_api.py -v
+-```
+-
+-**Output:** 19 passed, 1 warning
+ 
+-**Commit:** `fba42df` fix(web): use TemplateResponse for generate page images SSR
++Commit: `test(web): update Generate picture controls for Library-only images`
+diff --git a/README.md b/README.md
+index 3d0e715..577f384 100644
+--- a/README.md
++++ b/README.md
+@@ -41,23 +41,31 @@ Options:
+ 
+ ## Pipeline
+ 
+ 1. Normalize story text
+ 2. Synthesize narration with **Edge TTS** (word-boundary timings)
+ 3. Build **ASS** karaoke captions (yellow active word)
+ 4. **ffmpeg**: mute + loop video to audio length, center-crop to 9:16, burn captions, mux TTS
+ 
+ ## Web app
+ 
+-Browser UI to upload gameplay clips or import a YouTube URL on **Library** (background job; best MP4 ≤1080p; split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI (and `yt-dlp`, installed with the package).
++Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story prompt), and **Generate** page to pick sources, write a story, choose voice settings, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+ 
+-On **Generate**, switch **Roblox** (gameplay clip from Library) or **Picture** (upload a still on that tab: jpg/png/webp). Picture videos use the same story, voice, pitch, and speed; optional **Ken Burns** slowly zooms in. The greenscreen overlay applies to Roblox videos only.
++**Library** has three tabs:
++
++| Tab | Behavior |
++|-----|----------|
++| **1-minute clips** | Upload gameplay; split into complete one-minute slices (`media/sources/`) |
++| **Videos** | Upload full clips as-is, no slicing (`media/videos/`) |
++| **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
++
++On **Generate**, switch **Roblox** (pick a labeled clip from Library — `(1m)` slices or `(video)` raw) or **Picture** (pick an image from Library). Roblox mode adds a **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Picture videos support optional **Ken Burns** slow zoom. The greenscreen overlay applies to Roblox videos only.
+ 
+ ### Local run
+ 
+ ```bash
+ # Windows
+ set APP_PASSWORD=your-password
+ set APP_SECRET=your-long-random-secret
+ 
+ # macOS / Linux
+ export APP_PASSWORD=your-password
+@@ -66,59 +74,60 @@ export APP_SECRET=your-long-random-secret
+ pip install -e .
+ roblox-viral-web
+ ```
+ 
+ Or with auto-reload:
+ 
+ ```bash
+ uvicorn roblox_viral.web.app:create_app --factory --reload
+ ```
+ 
+-Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload or YouTube-import a source in **Library**, then use **Generate**.
+-
+-If YouTube shows a bot check (“Sign in to confirm you’re not a bot”), export cookies from a logged-in browser session to `media/youtube_cookies.txt` (Netscape format). Extensions such as “Get cookies.txt LOCALLY” work; or set `YOUTUBE_COOKIES` to that file path. Keep the file private — it authenticates as your account.
++Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload media in **Library**, then use **Generate**.
+ 
+ Optional env vars:
+ 
+ | Variable | Description |
+ |----------|-------------|
+ | `MEDIA_ROOT` | Upload/output directory (default: `./media`) |
+ | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
+ | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
+ | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
+-| `YOUTUBE_COOKIES` | Optional path to a Netscape `cookies.txt` for YouTube imports (bot checks). If unset, `MEDIA_ROOT/youtube_cookies.txt` is used when present. |
+ | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
+ | `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
+ 
+ ### n8n API
+ 
+ Set `API_KEY` in `.env`. Header: `X-API-Key`.
+ 
+ **Create** — `POST /api/v1/videos` as `multipart/form-data`:
+ 
+ - `voice`, `story`, `type` (`roblox`|`leni`)
+-- either file field `media` **or** text field `source_name` (Library name)
++- optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50…200, default 100)
++- either file field `media` **or** text field `source_name` (Library clip or raw video name)
+ 
+ Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`.
+ 
+ PowerShell / Windows (upload via `curl.exe` — works on PowerShell 5.1):
+ 
+ ```powershell
+ $apiKey = "your-key"
+ $base = "http://127.0.0.1:8000"
+ $video = "C:\path\to\clip.mp4"
+ 
+ $create = curl.exe -s -X POST "$base/api/v1/videos" `
+   -H "X-API-Key: $apiKey" `
+   -F "voice=en-US-EmmaNeural" `
+   -F "story=Hello from n8n.`nThis is a test." `
+   -F "type=roblox" `
++  -F "pitch=15" `
++  -F "speed=130" `
++  -F "video_speed=100" `
+   -F "media=@$video"
+ $create
+ $id = ($create | ConvertFrom-Json).id
+ 
+ do {
+   Start-Sleep -Seconds 2
+   $status = curl.exe -s "$base/api/v1/videos/$id" -H "X-API-Key: $apiKey" | ConvertFrom-Json
+   Write-Host "status=$($status.status)"
+ } while ($status.status -notin @("done", "error"))
+ 
+diff --git a/docs/superpowers/plans/2026-08-15-library-tabs-video-speed.md b/docs/superpowers/plans/2026-08-15-library-tabs-video-speed.md
+new file mode 100644
+index 0000000..d7605c0
+--- /dev/null
++++ b/docs/superpowers/plans/2026-08-15-library-tabs-video-speed.md
+@@ -0,0 +1,861 @@
++# Library Tabs, Raw Videos & Video Speed Implementation Plan
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
++
++**Goal:** Add Roblox-only gameplay `video_speed` (50–200%, default 100), restructure Library into three tabs (1‑minute slices / raw videos / images), remove YouTube import, and align the n8n API.
++
++**Architecture:** Validate `video_speed` in `voice.py`; apply ffmpeg `setpts` inside `render_video` when ≠100. Store raw uploads in `media/videos/` with list/save/delete/resolve helpers; resolve Roblox sources as sources-first then videos. Strip YouTube modules/routes/deps. Library page tabs call existing slice upload plus new video routes and `/api/images`.
++
++**Tech Stack:** Python 3.10+, FastAPI, Jinja2, vanilla JS, ffmpeg, pytest
++
++## Global Constraints
++
++- `video_speed`: 50…200, step 1, default **100**; independent of TTS pitch/speed
++- Roblox only — **hide** slider in Picture mode; Ken Burns unchanged
++- setpts factor `100/S` (200% → `setpts=100/200*PTS`); at 100% omit setpts
++- Overlay remains wall-clock `OVERLAY_DURATION_S` (3.5s), not scaled by `video_speed`
++- Source audio already discarded via `-map 1:a:0` — no mute work
++- Raw videos: `media/videos/`; slices: `media/sources/`; images: `media/images/`
++- Name collision across folders: **sources wins**
++- YouTube fully removed (UI, API, jobs, `youtube.py`, yt-dlp, cookies settings/docs)
++- Spec: `docs/superpowers/specs/2026-08-15-library-tabs-video-speed-design.md`
++
++## File map
++
++| File | Responsibility |
++|------|----------------|
++| `src/roblox_viral/voice.py` | `DEFAULT_VIDEO_SPEED`, `validate_video_speed` |
++| `src/roblox_viral/render.py` | `video_speed` kwarg + setpts in filter graph |
++| `tests/test_voice.py` | video_speed validation tests |
++| `tests/test_render.py` | setpts present/absent in cmd |
++| `src/roblox_viral/web/config.py` | `videos_dir`; drop youtube cookies |
++| `src/roblox_viral/web/library.py` | raw video CRUD; `list_roblox_sources`; `resolve_roblox_media` |
++| `tests/web/test_library.py` | save/list/delete/resolve raw + combined list |
++| `src/roblox_viral/web/jobs.py` | `video_speed` on record; resolve roblox media; drop YouTube |
++| `src/roblox_viral/web/app.py` | CreateJobBody; library routes; drop YouTube; Generate context |
++| `src/roblox_viral/web/api_v1.py` | optional `video_speed`; roblox resolve |
++| `src/roblox_viral/web/templates/library.html` | three tabs; no YouTube |
++| `src/roblox_viral/web/static/library.js` | tab UI + image upload via `/api/images` |
++| `src/roblox_viral/web/templates/generate.html` | labeled sources; video speed; no image upload |
++| `src/roblox_viral/web/static/app.js` | POST `video_speed`; hide slider; drop image upload JS |
++| `src/roblox_viral/web/youtube.py` | **Delete** |
++| `tests/web/test_youtube*.py` | **Delete** or replace with 404 smoke |
++| `pyproject.toml` | remove `yt-dlp` |
++| `README.md` | Library tabs, video_speed, drop YouTube |
++
++---
++
++### Task 1: `validate_video_speed` + `render_video` setpts
++
++**Files:**
++- Modify: `src/roblox_viral/voice.py`
++- Modify: `src/roblox_viral/render.py`
++- Modify: `tests/test_voice.py`
++- Modify: `tests/test_render.py`
++
++**Interfaces:**
++- Produces:
++  - `DEFAULT_VIDEO_SPEED = 100`
++  - `VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = 50, 200`
++  - `validate_video_speed(percent: int) -> int` — raise `ValueError` if not int or out of range; return `percent`
++  - `render_video(..., video_speed: int = 100)` — call `validate_video_speed`; if ≠100 insert `setpts=100/{S}*PTS` after crop, before `ass` (both `-vf` and overlay `filter_complex` base chain)
++
++- [ ] **Step 1: Write failing tests**
++
++Append to `tests/test_voice.py`:
++
++```python
++from roblox_viral.voice import (
++    DEFAULT_VIDEO_SPEED,
++    VIDEO_SPEED_MAX,
++    VIDEO_SPEED_MIN,
++    validate_video_speed,
++)
++
++
++def test_validate_video_speed_ok():
++    assert DEFAULT_VIDEO_SPEED == 100
++    assert validate_video_speed(100) == 100
++    assert validate_video_speed(50) == 50
++    assert validate_video_speed(200) == 200
++
++
++def test_validate_video_speed_rejects():
++    import pytest
++
++    with pytest.raises(ValueError):
++        validate_video_speed(49)
++    with pytest.raises(ValueError):
++        validate_video_speed(201)
++    with pytest.raises(ValueError):
++        validate_video_speed(True)  # type: ignore[arg-type]
++```
++
++Append to `tests/test_render.py`:
++
++```python
++def test_render_video_default_speed_omits_setpts(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video, audio_path=audio, ass_path=ass, output_path=out
++    )
++    vf = seen["cmd"][seen["cmd"].index("-vf") + 1]
++    assert "setpts" not in vf
++
++
++def test_render_video_speed_200_inserts_setpts(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        video_speed=200,
++    )
++    vf = seen["cmd"][seen["cmd"].index("-vf") + 1]
++    assert "setpts=100/200*PTS" in vf
++
++
++def test_render_video_overlay_includes_setpts_on_base(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    overlay = _touch(tmp_path / "overlay.mp4")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        overlay_path=overlay,
++        video_speed=150,
++    )
++    fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
++    assert "setpts=100/150*PTS" in fc
++    assert "lte(t,3.5)" in fc
++```
++
++- [ ] **Step 2: Run tests to verify they fail**
++
++Run: `pytest tests/test_voice.py::test_validate_video_speed_ok tests/test_render.py::test_render_video_speed_200_inserts_setpts -v`
++
++Expected: FAIL (import / missing kwarg)
++
++- [ ] **Step 3: Implement helpers + render**
++
++In `voice.py` add:
++
++```python
++DEFAULT_VIDEO_SPEED = 100
++VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = 50, 200
++
++
++def validate_video_speed(percent: int) -> int:
++    if not isinstance(percent, int) or isinstance(percent, bool):
++        raise ValueError("video_speed must be an int")
++    if percent < VIDEO_SPEED_MIN or percent > VIDEO_SPEED_MAX:
++        raise ValueError(
++            f"video_speed must be between {VIDEO_SPEED_MIN} and {VIDEO_SPEED_MAX}"
++        )
++    return percent
++```
++
++In `render.py`, import `validate_video_speed`. Add:
++
++```python
++def _playback_setpts(video_speed: int) -> str | None:
++    validate_video_speed(video_speed)
++    if video_speed == 100:
++        return None
++    return f"setpts=100/{video_speed}*PTS"
++```
++
++Add `video_speed: int = 100` to `render_video`. Build chain:
++
++```python
++setpts = _playback_setpts(video_speed)
++parts = [
++    f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
++    f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
++]
++if setpts:
++    parts.append(setpts)
++parts.append(f"ass='{ass_escaped}'")
++vf = ",".join(parts)
++```
++
++Overlay `filter_complex` base leg:
++
++```python
++base_parts = [
++    f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
++    f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
++]
++if setpts:
++    base_parts.append(setpts)
++base = ",".join(base_parts)
++fc = (
++    f"[0:v]{base}[base];"
++    f"[base]ass='{ass_escaped}'[cap];"
++    # existing chromakey + overlay with enable='lte(t,{OVERLAY_DURATION_S})'
++)
++```
++
++Keep overlay input `-t {OVERLAY_DURATION_S}` unchanged.
++
++- [ ] **Step 4: Run tests to verify they pass**
++
++Run: `pytest tests/test_voice.py tests/test_render.py -v`
++
++Expected: PASS
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add src/roblox_viral/voice.py src/roblox_viral/render.py tests/test_voice.py tests/test_render.py
++git commit -m "feat: apply optional setpts for gameplay video_speed"
++```
++
++---
++
++### Task 2: `videos_dir` + raw video library helpers
++
++**Files:**
++- Modify: `src/roblox_viral/web/config.py`
++- Modify: `src/roblox_viral/web/library.py`
++- Modify: `tests/web/test_library.py`
++
++**Interfaces:**
++- Produces:
++  - `Settings.videos_dir` → `media_root / "videos"`
++  - `ensure_media_dirs` also creates `videos_dir`
++  - `@dataclass(frozen=True) class RobloxSource: name: str; kind: str; path: Path; size_bytes: int` (`kind` in `{"slice","video"}`)
++  - `list_videos(settings) -> list[SourceVideo]`
++  - `resolve_video(settings, name: str) -> Path`
++  - `save_video(settings, filename: str, data: bytes) -> SourceVideo` — as-is, no slice; size ≤ `MAX_UPLOAD_BYTES`; exclusive create like images
++  - `delete_video(settings, name: str) -> None`
++  - `resolve_roblox_media(settings, name: str) -> Path` — try `resolve_source`, on `FileNotFoundError` try `resolve_video`
++  - `list_roblox_sources(settings) -> list[RobloxSource]` — all slices sorted then all videos sorted
++
++- [ ] **Step 1: Write failing tests**
++
++```python
++def test_save_video_stores_as_is_no_slice(tmp_path, monkeypatch):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++        youtube_cookies="",
++    )
++    s.ensure_media_dirs()
++    called = {"slice": False}
++
++    def boom(*a, **k):
++        called["slice"] = True
++        raise AssertionError("slice must not run")
++
++    monkeypatch.setattr(lib, "slice_into_minute_parts", boom)
++    item = lib.save_video(s, "full.mp4", b"rawbytes")
++    assert item.name == "full.mp4"
++    assert (s.videos_dir / "full.mp4").read_bytes() == b"rawbytes"
++    assert called["slice"] is False
++    assert lib.list_videos(s)[0].name == "full.mp4"
++
++
++def test_resolve_roblox_media_sources_win(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++        youtube_cookies="",
++    )
++    s.ensure_media_dirs()
++    (s.sources_dir / "same.mp4").write_bytes(b"slice")
++    (s.videos_dir / "same.mp4").write_bytes(b"raw")
++    path = lib.resolve_roblox_media(s, "same.mp4")
++    assert path == (s.sources_dir / "same.mp4").resolve()
++
++
++def test_resolve_roblox_media_falls_back_to_videos(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++        youtube_cookies="",
++    )
++    s.ensure_media_dirs()
++    (s.videos_dir / "only.mp4").write_bytes(b"raw")
++    path = lib.resolve_roblox_media(s, "only.mp4")
++    assert path == (s.videos_dir / "only.mp4").resolve()
++
++
++def test_list_roblox_sources_labels_kinds(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++        youtube_cookies="",
++    )
++    s.ensure_media_dirs()
++    (s.sources_dir / "a-1.mp4").write_bytes(b"1")
++    (s.videos_dir / "b.mp4").write_bytes(b"2")
++    items = lib.list_roblox_sources(s)
++    kinds = {i.name: i.kind for i in items}
++    assert kinds["a-1.mp4"] == "slice"
++    assert kinds["b.mp4"] == "video"
++```
++
++After Task 5 removes `youtube_cookies`, drop that kwarg from Settings construction in these tests.
++
++- [ ] **Step 2: Run tests — expect FAIL**
++
++Run: `pytest tests/web/test_library.py -k "save_video or resolve_roblox or list_roblox" -v`
++
++- [ ] **Step 3: Implement**
++
++`config.py`:
++
++```python
++@property
++def videos_dir(self) -> Path:
++    return self.media_root / "videos"
++
++def ensure_media_dirs(self) -> None:
++    for d in (
++        self.sources_dir,
++        self.videos_dir,
++        self.images_dir,
++        self.outputs_dir,
++        self.jobs_dir,
++    ):
++        d.mkdir(parents=True, exist_ok=True)
++```
++
++`library.py`:
++
++```python
++@dataclass(frozen=True)
++class RobloxSource:
++    name: str
++    kind: str  # "slice" | "video"
++    path: Path
++    size_bytes: int
++
++
++def _commit_video_upload(videos_dir: Path, safe: str, data: bytes) -> Path:
++    stem = Path(safe).stem
++    suffix = Path(safe).suffix.lower()
++    dest = videos_dir / safe
++    while True:
++        try:
++            with open(dest, "xb") as fh:
++                fh.write(data)
++        except FileExistsError:
++            dest = videos_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
++            continue
++        except BaseException:
++            dest.unlink(missing_ok=True)
++            raise
++        return dest
++
++
++def list_videos(settings: Settings) -> list[SourceVideo]:
++    items: list[SourceVideo] = []
++    if not settings.videos_dir.is_dir():
++        return items
++    for path in sorted(settings.videos_dir.iterdir()):
++        if path.is_file() and _SAFE_NAME.match(path.name) and not path.name.startswith("."):
++            items.append(SourceVideo(path.name, path, path.stat().st_size))
++    return items
++
++
++def resolve_video(settings: Settings, name: str) -> Path:
++    safe = _safe_name(name)
++    path = (settings.videos_dir / safe).resolve()
++    if not path.is_relative_to(settings.videos_dir.resolve()):
++        raise ValueError("Invalid path")
++    if not path.is_file():
++        raise FileNotFoundError(safe)
++    return path
++
++
++def save_video(settings: Settings, filename: str, data: bytes) -> SourceVideo:
++    if len(data) > MAX_UPLOAD_BYTES:
++        raise ValueError(
++            f"Upload exceeds maximum size of {MAX_UPLOAD_BYTES} bytes"
++        )
++    safe = _safe_name(filename)
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    dest = _commit_video_upload(settings.videos_dir, safe, data)
++    return SourceVideo(dest.name, dest, dest.stat().st_size)
++
++
++def delete_video(settings: Settings, name: str) -> None:
++    resolve_video(settings, name).unlink()
++
++
++def resolve_roblox_media(settings: Settings, name: str) -> Path:
++    try:
++        return resolve_source(settings, name)
++    except FileNotFoundError:
++        return resolve_video(settings, name)
++
++
++def list_roblox_sources(settings: Settings) -> list[RobloxSource]:
++    out: list[RobloxSource] = []
++    for s in list_sources(settings):
++        out.append(RobloxSource(s.name, "slice", s.path, s.size_bytes))
++    for v in list_videos(settings):
++        out.append(RobloxSource(v.name, "video", v.path, v.size_bytes))
++    return out
++```
++
++- [ ] **Step 4: Run tests — expect PASS**
++
++Run: `pytest tests/web/test_library.py -k "save_video or resolve_roblox or list_roblox" -v`
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add src/roblox_viral/web/config.py src/roblox_viral/web/library.py tests/web/test_library.py
++git commit -m "feat(web): add media/videos library helpers for raw uploads"
++```
++
++---
++
++### Task 3: JobManager `video_speed` + roblox resolve
++
++**Files:**
++- Modify: `src/roblox_viral/web/jobs.py`
++- Modify: `tests/web/test_jobs.py`
++- Modify: `src/roblox_viral/web/app.py` (`CreateJobBody` + `/api/jobs`)
++- Modify: `tests/web/test_api.py`
++
++**Interfaces:**
++- Consumes: `validate_video_speed`, `resolve_roblox_media`, `render_video(..., video_speed=)`
++- Produces:
++  - `JobRecord.video_speed: int = DEFAULT_VIDEO_SPEED`
++  - `create(..., video_speed: int = DEFAULT_VIDEO_SPEED)` — validate; non-ephemeral roblox uses `resolve_roblox_media`
++  - `run_job` resolves via `resolve_roblox_media` (non-ephemeral roblox); passes `video_speed=record.video_speed` to `render_video`
++  - Persist/load `video_speed` in `status.json`
++  - `CreateJobBody.video_speed: int | None = None` → default 100; validate → 400
++
++- [ ] **Step 1: Write failing tests**
++
++In `tests/web/test_jobs.py` / `test_api.py` (follow existing helpers):
++
++```python
++def test_create_job_persists_video_speed(tmp_path, monkeypatch):
++    # Settings + file in videos_dir only
++    # mgr.create(..., video_speed=150)
++    # assert record.video_speed == 150
++
++
++def test_create_job_rejects_bad_video_speed(tmp_path, monkeypatch):
++    # create(..., video_speed=999) raises ValueError
++
++
++def test_run_job_passes_video_speed_to_render(tmp_path, monkeypatch):
++    # monkeypatch EdgeTTSProvider, write_ass, render_video; capture kwargs
++    # assert seen["video_speed"] == 175
++
++
++def test_api_jobs_accepts_video_speed(tmp_path, monkeypatch):
++    # POST /api/jobs with video_speed: 120 → 200; GET shows 120
++
++
++def test_api_jobs_rejects_video_speed(tmp_path, monkeypatch):
++    # video_speed: 10 → 400
++```
++
++- [ ] **Step 2: Run — expect FAIL**
++
++Run: `pytest tests/web/test_jobs.py tests/web/test_api.py -k video_speed -v`
++
++- [ ] **Step 3: Implement**
++
++`jobs.py` — import `DEFAULT_VIDEO_SPEED`, `validate_video_speed`, `resolve_roblox_media`. Add field on `JobRecord`. In `create`:
++
++```python
++validate_video_speed(video_speed)
++...
++elif mode == "picture":
++    resolve_image(settings, source_name)
++else:
++    resolve_roblox_media(settings, source_name)
++    ken_burns = False
++```
++
++Persist `video_speed` on record and in disk load:
++
++```python
++video_speed=int(data["video_speed"]) if "video_speed" in data else DEFAULT_VIDEO_SPEED,
++```
++
++`run_job` roblox non-ephemeral: `resolve_roblox_media`; `render_video(..., video_speed=record.video_speed)`.
++
++`app.py` CreateJobBody + handler:
++
++```python
++video_speed: int | None = None
++...
++video_speed = DEFAULT_VIDEO_SPEED if body.video_speed is None else body.video_speed
++validate_video_speed(video_speed)  # in same try as pitch/speed
++mgr.create(..., video_speed=video_speed, ...)
++```
++
++- [ ] **Step 4: Run — expect PASS**
++
++Run: `pytest tests/web/test_jobs.py tests/web/test_api.py -v`
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add src/roblox_viral/web/jobs.py src/roblox_viral/web/app.py tests/web/test_jobs.py tests/web/test_api.py
++git commit -m "feat(web): persist and apply job video_speed for Roblox renders"
++```
++
++---
++
++### Task 4: Generate UI — labeled sources, video speed slider, drop image upload
++
++**Files:**
++- Modify: `src/roblox_viral/web/app.py` (generate page → `list_roblox_sources`)
++- Modify: `src/roblox_viral/web/templates/generate.html`
++- Modify: `src/roblox_viral/web/static/app.js`
++
++**Interfaces:**
++- Consumes: `list_roblox_sources`
++- Produces: options labeled `(1m)` / `(video)`; `#video_speed` slider hidden in Picture; POST includes `video_speed`; no image upload/delete on Generate
++
++- [ ] **Step 1: Update `generate.html`**
++
++```html
++{% for s in sources %}
++<option value="{{ s.name }}">{{ s.name }} {% if s.kind == "slice" %}(1m){% else %}(video){% endif %}</option>
++{% endfor %}
++```
++
++Picture: select + Ken Burns only; empty text `No images — upload in Library`.
++
++After voice speed:
++
++```html
++<label class="slider-field" id="video-speed-field">
++  Video speed <span id="video-speed-value">100%</span>
++  <input id="video_speed" name="video_speed" type="range" min="50" max="200" step="1" value="100" />
++</label>
++```
++
++- [ ] **Step 2: Update `app.js`**
++
++- Label sync for `#video_speed` / `#video-speed-value`
++- Mode tab: hide `#video-speed-field` in Picture; show in Roblox
++- Job POST: `video_speed: Number(...)`
++- Remove image upload/delete fetch handlers
++
++- [ ] **Step 3: Update `generate_page`**
++
++```python
++sources = list_roblox_sources(settings)
++```
++
++- [ ] **Step 4: Commit**
++
++```bash
++git add src/roblox_viral/web/templates/generate.html src/roblox_viral/web/static/app.js src/roblox_viral/web/app.py
++git commit -m "feat(web): Generate video_speed slider and labeled roblox sources"
++```
++
++---
++
++### Task 5: Remove YouTube
++
++**Files:**
++- Delete: `src/roblox_viral/web/youtube.py`
++- Delete: `tests/web/test_youtube.py`, `tests/web/test_youtube_api.py`, `tests/web/test_youtube_jobs.py`
++- Create: `tests/web/test_youtube_removed.py`
++- Modify: `src/roblox_viral/web/jobs.py` — remove `create_youtube`, `run_youtube_job`, youtube imports
++- Modify: `src/roblox_viral/web/app.py` — remove `POST /api/library/youtube`
++- Modify: `src/roblox_viral/web/config.py` — remove `youtube_cookies` / `youtube_cookies_path` / env
++- Modify: `tests/web/test_config.py` — remove youtube cookies tests
++- Modify: `pyproject.toml` — remove `yt-dlp`
++- Modify: `README.md` — remove YouTube/cookies/`YOUTUBE_COOKIES` (finish polish in Task 8)
++
++**Interfaces:**
++- Produces: `POST /api/library/youtube` → 404; no `yt_dlp` imports
++
++- [ ] **Step 1: Write smoke test**
++
++```python
++def test_youtube_endpoint_gone(tmp_path, monkeypatch):
++    # logged-in client (same pattern as other library API tests)
++    r = c.post(
++        "/api/library/youtube",
++        json={"url": "https://youtu.be/x", "name": "a"},
++    )
++    assert r.status_code == 404
++```
++
++- [ ] **Step 2: Run — expect FAIL while route exists (not 404)**
++
++- [ ] **Step 3: Delete YouTube code paths**
++
++- Remove jobs/app/config pieces listed above
++- Delete `youtube.py` and old youtube tests
++- Remove `yt-dlp` from `pyproject.toml`
++- Prefer drop unused JobStatus values `downloading` / `slicing` if nothing sets them
++- Keep optional `JobRecord` fields `url`/`stem`/`created_slices` for old status.json reads, or remove if tests do not need them — either is fine if load still tolerant
++
++- [ ] **Step 4: Run**
++
++Run: `pytest tests/web -v`
++
++Expected: PASS
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add -u src/roblox_viral/web tests/web pyproject.toml README.md
++git add tests/web/test_youtube_removed.py
++git commit -m "feat(web): remove YouTube library import and yt-dlp"
++```
++
++---
++
++### Task 6: Library page three tabs
++
++**Files:**
++- Modify: `src/roblox_viral/web/templates/library.html`
++- Modify: `src/roblox_viral/web/static/library.js`
++- Modify: `src/roblox_viral/web/app.py`
++- Modify: `tests/web/` (library upload/route tests)
++
++**Interfaces:**
++- Produces:
++  - `POST /library/upload` — slices (unchanged); template `tab="slices"`
++  - `POST /library/delete` — delete slice
++  - `POST /library/videos/upload` — `save_video`
++  - `POST /library/videos/delete` — `delete_video`
++  - Images via `POST /api/images` + `DELETE /api/images/{name}` from `library.js`
++  - Tabs: **1-minute clips** | **Videos** | **Images**
++  - `_library_ctx(settings, *, error=None, message=None, tab="slices")` → `sources`, `videos`, `images`, `error`, `message`, `tab`
++
++- [ ] **Step 1: Write failing route tests**
++
++```python
++def test_library_raw_video_upload(tmp_path, monkeypatch):
++    # logged-in client
++    r = c.post(
++        "/library/videos/upload",
++        files={"file": ("clip.mp4", b"data", "video/mp4")},
++    )
++    assert r.status_code == 200
++    assert (settings.videos_dir / "clip.mp4").is_file()
++
++
++def test_library_page_has_tabs_not_youtube(tmp_path, monkeypatch):
++    r = c.get("/library")
++    assert r.status_code == 200
++    body = r.text
++    assert "YouTube" not in body
++    assert "Videos" in body
++    assert "Images" in body
++```
++
++- [ ] **Step 2: Run — expect FAIL**
++
++- [ ] **Step 3: Implement routes + template + JS**
++
++Template: three tab buttons + three panels (slices form `/library/upload`; videos form `/library/videos/upload`; images file input + JS to `/api/images`). Server-render lists with delete forms/buttons. After POST, re-render with correct `tab` so the active panel stays open.
++
++`library.js`: tab switching; image upload `FormData` → `POST /api/images` → reload; image delete → `DELETE /api/images/{name}` → reload.
++
++Every `TemplateResponse` for library must include `videos`, `images`, `tab`.
++
++- [ ] **Step 4: Run**
++
++Run: `pytest tests/web -k library -v`
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add src/roblox_viral/web/templates/library.html src/roblox_viral/web/static/library.js src/roblox_viral/web/app.py tests/web
++git commit -m "feat(web): Library tabs for slices, raw videos, and images"
++```
++
++---
++
++### Task 7: n8n API `video_speed` + raw `source_name`
++
++**Files:**
++- Modify: `src/roblox_viral/web/api_v1.py`
++- Modify: `tests/web/test_api_v1.py`
++- Modify: `README.md`
++- Modify: `scripts/test-n8n-api.ps1` (optional `-F "video_speed=100"`)
++
++**Interfaces:**
++- Produces: form `video_speed: str = Form("")`; default `DEFAULT_VIDEO_SPEED`; invalid → 400
++- Roblox `source_name` works for `videos/` via Task 3 `resolve_roblox_media`
++
++- [ ] **Step 1: Write failing tests**
++
++```python
++def test_create_accepts_video_speed(tmp_path, monkeypatch):
++    # clip in sources; video_speed="160"; GET → 160
++
++
++def test_create_resolves_raw_library_video(tmp_path, monkeypatch):
++    # only videos_dir/raw.mp4; source_name=raw.mp4 → 200
++
++
++def test_create_invalid_video_speed_400(tmp_path, monkeypatch):
++    # video_speed="9" → 400
++```
++
++- [ ] **Step 2: Run — FAIL**
++
++- [ ] **Step 3: Implement**
++
++```python
++video_speed: str = Form(""),
++...
++video_speed_i = _optional_int(video_speed, DEFAULT_VIDEO_SPEED, "video_speed")
++validate_video_speed(video_speed_i)
++...
++mgr.create(..., video_speed=video_speed_i, ...)
++```
++
++- [ ] **Step 4: Run**
++
++Run: `pytest tests/web/test_api_v1.py -v`
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add src/roblox_viral/web/api_v1.py tests/web/test_api_v1.py README.md scripts/test-n8n-api.ps1
++git commit -m "feat(api): optional video_speed and raw library source_name for n8n"
++```
++
++---
++
++### Task 8: README polish + full regression
++
++**Files:**
++- Modify: `README.md`
++
++- [ ] **Step 1: Finish README**
++
++Document Library tabs, Generate video speed, n8n `video_speed`, no YouTube/yt-dlp/cookies.
++
++- [ ] **Step 2: Full suite**
++
++Run: `pytest -q`
++
++Expected: PASS
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add README.md
++git commit -m "docs: document library tabs and video_speed"
++```
++
++---
++
++## Spec coverage (self-review)
++
++| Spec requirement | Task |
++|------------------|------|
++| video_speed 50–200 default 100 | 1, 3, 4 |
++| Independent of voice | 3, 4 |
++| Hide in Picture | 4 |
++| setpts / 100% passthrough | 1 |
++| Overlay wall-clock | 1 |
++| Library three tabs | 6 |
++| `media/videos/` | 2 |
++| Images from Library only | 4, 6 |
++| Labeled Generate dropdown | 4 |
++| Remove YouTube | 5 |
++| n8n video_speed + raw resolve | 7 |
++| README | 5, 7, 8 |
++
++## Consistency check
++
++- Names: `validate_video_speed`, `DEFAULT_VIDEO_SPEED`, `resolve_roblox_media`, `list_roblox_sources`, `save_video`
++- setpts string: `setpts=100/{S}*PTS`
++- No TBD/TODO placeholders in steps
+diff --git a/pyproject.toml b/pyproject.toml
+index f6dfe89..e5a81a0 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -9,21 +9,20 @@ description = "Generate vertical Roblox storytime videos with TTS and karaoke ca
+ readme = "README.md"
+ requires-python = ">=3.10"
+ dependencies = [
+   "edge-tts>=6.1.9",
+   "fastapi>=0.115.0",
+   "uvicorn[standard]>=0.30.0",
+   "jinja2>=3.1.0",
+   "python-multipart>=0.0.9",
+   "itsdangerous>=2.2.0",
+   "httpx>=0.27.0",
+-  "yt-dlp>=2024.8.0",
+ ]
+ 
+ [project.scripts]
+ roblox-viral = "roblox_viral.cli:main"
+ roblox-viral-web = "roblox_viral.web.app:main"
+ 
+ [tool.setuptools.packages.find]
+ where = ["src"]
+ 
+ [tool.setuptools.package-data]
+diff --git a/scripts/test-n8n-api.ps1 b/scripts/test-n8n-api.ps1
+index a4727aa..56e959e 100644
+--- a/scripts/test-n8n-api.ps1
++++ b/scripts/test-n8n-api.ps1
+@@ -1,20 +1,23 @@
+ # n8n / local API test (Windows PowerShell 5.1 + curl.exe)
+ $apiKey = "your-key-from-.env"   # paste API_KEY from .env
+ $base   = "http://127.0.0.1:8000"
+ $video  = "C:\path\to\your.mp4"  # change this
+ 
+ $createJson = curl.exe -s -X POST "$base/api/v1/videos" `
+   -H "X-API-Key: $apiKey" `
+   -F "voice=en-US-EmmaNeural" `
+   -F "story=Hello from n8n.`nThis is a test." `
+   -F "type=roblox" `
++  -F "pitch=15" `
++  -F "speed=130" `
++  -F "video_speed=100" `
+   -F "media=@$video"
+ 
+ Write-Host "create: $createJson"
+ $create = $createJson | ConvertFrom-Json
+ if (-not $create.id) { throw "Create failed: $createJson" }
+ $id = $create.id
+ Write-Host "id=$id"
+ 
+ do {
+   Start-Sleep -Seconds 2
+diff --git a/src/roblox_viral/render.py b/src/roblox_viral/render.py
+index 4931357..4b02e5e 100644
+--- a/src/roblox_viral/render.py
++++ b/src/roblox_viral/render.py
+@@ -1,19 +1,21 @@
+ """ffmpeg-based video render: loop, crop to 9:16, burn captions, mux TTS."""
+ 
+ from __future__ import annotations
+ 
+ import json
+ import shutil
+ import subprocess
+ from pathlib import Path
+ 
++from roblox_viral.voice import validate_video_speed
++
+ 
+ OUTPUT_WIDTH = 1080
+ OUTPUT_HEIGHT = 1920
+ OVERLAY_DURATION_S = 3.5
+ OVERLAY_HEIGHT = OUTPUT_HEIGHT // 2
+ OVERLAY_CHROMA_COLOR = "0x00FE00"
+ OVERLAY_CHROMA_SIMILARITY = "0.30"
+ OVERLAY_CHROMA_BLEND = "0.10"
+ 
+ KEN_BURNS_ZOOM = 1.20
+@@ -68,29 +70,37 @@ def probe_duration_seconds(media_path: Path | str) -> float:
+     return duration
+ 
+ 
+ def _ass_filter_path(ass_path: Path) -> str:
+     """Escape path for ffmpeg ass filter (Windows-safe)."""
+     p = ass_path.resolve().as_posix()
+     p = p.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+     return p
+ 
+ 
++def _playback_setpts(video_speed: int) -> str | None:
++    validate_video_speed(video_speed)
++    if video_speed == 100:
++        return None
++    return f"setpts=100/{video_speed}*PTS"
++
++
+ def render_video(
+     *,
+     video_path: Path | str,
+     audio_path: Path | str,
+     ass_path: Path | str,
+     output_path: Path | str,
+     keep_temp: bool = False,
+     work_dir: Path | str | None = None,
+     overlay_path: Path | str | None = None,
++    video_speed: int = 100,
+ ) -> Path:
+     """
+     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
+ 
+     When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
+     composite it centered (half frame height) over captions at the start.
+ 
+     Original video audio is discarded by mapping only the TTS audio stream.
+     Intermediate files live under work_dir when provided; otherwise only final out is kept
+     unless keep_temp is True (work_dir is then left for the caller).
+@@ -114,27 +124,31 @@ def render_video(
+         overlay = Path(overlay_path)
+         if not overlay.is_file():
+             raise RenderError(f"Overlay video not found: {overlay}")
+ 
+     out.parent.mkdir(parents=True, exist_ok=True)
+     if work_dir is not None:
+         Path(work_dir).mkdir(parents=True, exist_ok=True)
+ 
+     audio_duration = probe_duration_seconds(audio)
+     ass_escaped = _ass_filter_path(ass)
++    setpts = _playback_setpts(video_speed)
+ 
+     if overlay is None:
+-        vf = (
+-            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+-            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+-            f"ass='{ass_escaped}'"
+-        )
++        parts = [
++            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
++            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
++        ]
++        if setpts:
++            parts.append(setpts)
++        parts.append(f"ass='{ass_escaped}'")
++        vf = ",".join(parts)
+         cmd = [
+             ffmpeg,
+             "-y",
+             "-stream_loop",
+             "-1",
+             "-i",
+             str(video),
+             "-i",
+             str(audio),
+             "-t",
+@@ -154,23 +168,29 @@ def render_video(
+             "-c:a",
+             "aac",
+             "-b:a",
+             "192k",
+             "-shortest",
+             "-movflags",
+             "+faststart",
+             str(out),
+         ]
+     else:
++        base_parts = [
++            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
++            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
++        ]
++        if setpts:
++            base_parts.append(setpts)
++        base = ",".join(base_parts)
+         fc = (
+-            f"[0:v]scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+-            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}[base];"
++            f"[0:v]{base}[base];"
+             f"[base]ass='{ass_escaped}'[cap];"
+             f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
+             f"format=yuva420p,scale=-2:{OVERLAY_HEIGHT}[ov];"
+             f"[cap][ov]overlay=(W-w)/2:(H-h)/2:enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[outv]"
+         )
+         cmd = [
+             ffmpeg,
+             "-y",
+             "-stream_loop",
+             "-1",
+diff --git a/src/roblox_viral/voice.py b/src/roblox_viral/voice.py
+index 822e806..d8975ad 100644
+--- a/src/roblox_viral/voice.py
++++ b/src/roblox_viral/voice.py
+@@ -21,20 +21,33 @@ class VoiceProvider(Protocol):
+     def synthesize(self, text: str, output_path: Path | str) -> list[WordTiming]:
+         """Synthesize speech to output_path; return word timings."""
+         ...
+ 
+ 
+ DEFAULT_PITCH = 15
+ DEFAULT_SPEED = 130
+ PITCH_MIN, PITCH_MAX = -100, 100
+ SPEED_MIN, SPEED_MAX = 50, 200
+ 
++DEFAULT_VIDEO_SPEED = 100
++VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = 50, 200
++
++
++def validate_video_speed(percent: int) -> int:
++    if not isinstance(percent, int) or isinstance(percent, bool):
++        raise ValueError("video_speed must be an int")
++    if percent < VIDEO_SPEED_MIN or percent > VIDEO_SPEED_MAX:
++        raise ValueError(
++            f"video_speed must be between {VIDEO_SPEED_MIN} and {VIDEO_SPEED_MAX}"
++        )
++    return percent
++
+ 
+ def format_edge_pitch(pitch: int) -> str:
+     if not isinstance(pitch, int) or isinstance(pitch, bool):
+         raise ValueError("pitch must be an int")
+     if pitch < PITCH_MIN or pitch > PITCH_MAX:
+         raise ValueError(f"pitch must be between {PITCH_MIN} and {PITCH_MAX}")
+     if pitch >= 0:
+         return f"+{pitch}Hz"
+     return f"{pitch}Hz"
+ 
+diff --git a/src/roblox_viral/web/api_v1.py b/src/roblox_viral/web/api_v1.py
+index 79102d5..6ace8de 100644
+--- a/src/roblox_viral/web/api_v1.py
++++ b/src/roblox_viral/web/api_v1.py
+@@ -8,47 +8,66 @@ from fastapi import (
+     BackgroundTasks,
+     Depends,
+     File,
+     Form,
+     HTTPException,
+     Request,
+     UploadFile,
+ )
+ from fastapi.responses import FileResponse
+ 
+-from roblox_viral.voice import DEFAULT_PITCH, DEFAULT_SPEED
++from roblox_viral.voice import (
++    DEFAULT_PITCH,
++    DEFAULT_SPEED,
++    DEFAULT_VIDEO_SPEED,
++    format_edge_pitch,
++    format_edge_rate,
++    validate_video_speed,
++)
+ from roblox_viral.web import library as library_mod
+ from roblox_viral.web.auth import require_api_key
+ from roblox_viral.web.jobs import BusyError, JobManager
+ from roblox_viral.web.voices import DEFAULT_VOICE
+ 
+ router = APIRouter(prefix="/api/v1", tags=["v1"])
+ 
+ 
+ def _mode_from_type(video_type: str) -> str:
+     t = (video_type or "").strip().lower()
+     if t == "roblox":
+         return "roblox"
+     if t == "leni":
+         return "picture"
+     raise ValueError("type must be 'roblox' or 'leni'")
+ 
+ 
++def _optional_int(raw: str | None, default: int, label: str) -> int:
++    if raw is None or str(raw).strip() == "":
++        return default
++    try:
++        return int(str(raw).strip())
++    except ValueError as exc:
++        raise ValueError(f"{label} must be an int") from exc
++
++
+ @router.post("/videos")
+ async def create_video(
+     request: Request,
+     background_tasks: BackgroundTasks,
+     _: None = Depends(require_api_key),
+     voice: str = Form(""),
+     story: str = Form(""),
+     type: str = Form(""),
+     source_name: str = Form(""),
++    pitch: str = Form(""),
++    speed: str = Form(""),
++    video_speed: str = Form(""),
+     media: UploadFile | None = File(None),
+ ) -> dict:
+     settings = request.app.state.settings
+     mgr: JobManager = request.app.state.job_manager
+     try:
+         mode = _mode_from_type(type)
+     except ValueError as exc:
+         raise HTTPException(status_code=400, detail=str(exc)) from exc
+ 
+     has_media = media is not None and bool(getattr(media, "filename", None))
+@@ -58,20 +77,32 @@ async def create_video(
+             status_code=400,
+             detail="Provide either media file or source_name, not both",
+         )
+     if not has_media and not name:
+         raise HTTPException(
+             status_code=400,
+             detail="Provide media file or source_name",
+         )
+ 
+     voice_s = (voice or "").strip() or DEFAULT_VOICE
++    try:
++        pitch_i = _optional_int(pitch, DEFAULT_PITCH, "pitch")
++        speed_i = _optional_int(speed, DEFAULT_SPEED, "speed")
++        video_speed_i = _optional_int(
++            video_speed, DEFAULT_VIDEO_SPEED, "video_speed"
++        )
++        format_edge_pitch(pitch_i)
++        format_edge_rate(speed_i)
++        validate_video_speed(video_speed_i)
++    except ValueError as exc:
++        raise HTTPException(status_code=400, detail=str(exc)) from exc
++
+     ephemeral = False
+     input_bytes: bytes | None = None
+     stored_name = name
+ 
+     if has_media:
+         assert media is not None
+         raw_name = Path(media.filename or "upload.bin").name
+         data = await media.read()
+         try:
+             if mode == "picture":
+@@ -94,22 +125,23 @@ async def create_video(
+         stored_name = f"input{suffix}"
+         ephemeral = True
+         input_bytes = data
+ 
+     try:
+         record = mgr.create(
+             settings,
+             stored_name,
+             story,
+             voice_s,
+-            pitch=DEFAULT_PITCH,
+-            speed=DEFAULT_SPEED,
++            pitch=pitch_i,
++            speed=speed_i,
++            video_speed=video_speed_i,
+             mode=mode,
+             ken_burns=False,
+             ephemeral=ephemeral,
+         )
+     except BusyError as exc:
+         raise HTTPException(status_code=409, detail=str(exc)) from exc
+     except (ValueError, FileNotFoundError) as exc:
+         raise HTTPException(status_code=400, detail=str(exc)) from exc
+ 
+     if input_bytes is not None:
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index 9416af2..31372ce 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -18,64 +18,83 @@ from fastapi import (
+ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+ from fastapi.staticfiles import StaticFiles
+ from fastapi.templating import Jinja2Templates
+ from pydantic import BaseModel, ValidationError
+ from starlette.middleware.sessions import SessionMiddleware
+ from starlette.status import HTTP_303_SEE_OTHER, HTTP_409_CONFLICT
+ 
+ from roblox_viral.voice import (
+     DEFAULT_PITCH,
+     DEFAULT_SPEED,
++    DEFAULT_VIDEO_SPEED,
+     format_edge_pitch,
+     format_edge_rate,
++    validate_video_speed,
+ )
+ from roblox_viral.web.api_v1 import router as api_v1_router
+ from roblox_viral.web.auth import require_login, set_authenticated
+ from roblox_viral.web.config import Settings, get_settings
+ from roblox_viral.web.gemini import generate_story
+ from roblox_viral.web.jobs import BusyError, JobManager
+ from roblox_viral.web import library as library_mod
+ from roblox_viral.web.library import (
+     delete_image,
+     delete_source,
++    delete_video,
+     list_images,
+     list_outputs,
++    list_roblox_sources,
+     list_sources,
++    list_videos,
+     save_image,
+     save_upload,
++    save_video,
+ )
+ from roblox_viral.web.prompt import load_prompt, save_prompt
+ from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
+ 
+ WEB_DIR = Path(__file__).resolve().parent
+ TEMPLATES_DIR = WEB_DIR / "templates"
+ STATIC_DIR = WEB_DIR / "static"
+ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+ 
+ _UPLOAD_CHUNK = 1024 * 1024  # 1 MiB
+ 
+ 
++def _library_ctx(
++    settings: Settings,
++    *,
++    error: str | None = None,
++    message: str | None = None,
++    tab: str = "slices",
++) -> dict:
++    return {
++        "sources": list_sources(settings),
++        "videos": list_videos(settings),
++        "images": list_images(settings),
++        "error": error,
++        "message": message,
++        "tab": tab,
++    }
++
++
+ class CreateJobBody(BaseModel):
+     source_name: str = ""
+     story: str = ""
+     voice: str | None = None
+     pitch: int | None = None
+     speed: int | None = None
++    video_speed: int | None = None
+     mode: str = "roblox"
+     ken_burns: bool = False
+ 
+ 
+-class YoutubeImportBody(BaseModel):
+-    url: str = ""
+-    name: str = ""
+-
+-
+ async def _read_upload_capped(
+     file: UploadFile, max_bytes: int | None = None
+ ) -> bytes:
+     limit = library_mod.MAX_UPLOAD_BYTES if max_bytes is None else max_bytes
+     chunks: list[bytes] = []
+     total = 0
+     while True:
+         chunk = await file.read(_UPLOAD_CHUNK)
+         if not chunk:
+             break
+@@ -139,136 +158,154 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+     def logout(request: Request) -> RedirectResponse:
+         set_authenticated(request, False)
+         return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
+ 
+     @app.get("/", response_class=HTMLResponse)
+     async def generate_page(
+         request: Request,
+         _: None = Depends(require_login),
+     ) -> HTMLResponse:
+         settings = request.app.state.settings
+-        sources = list_sources(settings)
++        sources = list_roblox_sources(settings)
+         try:
+             voices = await list_english_voices()
+         except Exception:
+             voices = [VoiceInfo(DEFAULT_VOICE, "en-US", "Female")]
+         return templates.TemplateResponse(
+             request,
+             "generate.html",
+             {
+                 "sources": sources,
+                 "voices": voices,
+                 "default_voice": DEFAULT_VOICE,
+                 "recent_outputs": list_outputs(settings),
+                 "images": list_images(settings),
+             },
+         )
+ 
+     @app.get("/library", response_class=HTMLResponse)
+     def library_page(
+         request: Request,
++        tab: str = "slices",
+         _: None = Depends(require_login),
+     ) -> HTMLResponse:
+         settings = request.app.state.settings
++        if tab not in {"slices", "videos", "images"}:
++            tab = "slices"
+         return templates.TemplateResponse(
+             request,
+             "library.html",
+-            {
+-                "sources": list_sources(settings),
+-                "error": None,
+-                "message": None,
+-            },
++            _library_ctx(settings, tab=tab),
+         )
+ 
+     @app.post("/library/upload", response_model=None)
+     async def library_upload(
+         request: Request,
+         file: UploadFile = File(...),
+         _: None = Depends(require_login),
+     ) -> Response:
+         settings = request.app.state.settings
+         filename = file.filename or ""
+         try:
+             data = await _read_upload_capped(file)
+             slices = save_upload(settings, filename, data)
+         except ValueError as exc:
+             return templates.TemplateResponse(
+                 request,
+                 "library.html",
+-                {
+-                    "sources": list_sources(settings),
+-                    "error": str(exc),
+-                    "message": None,
+-                },
++                _library_ctx(settings, error=str(exc), tab="slices"),
+                 status_code=400,
+             )
+         names = ", ".join(s.name for s in slices)
+         return templates.TemplateResponse(
+             request,
+             "library.html",
+-            {
+-                "sources": list_sources(settings),
+-                "error": None,
+-                "message": (
++            _library_ctx(
++                settings,
++                message=(
+                     f"Created {len(slices)} one-minute slice(s): {names}. "
+                     "A leftover under 1 minute was discarded if present."
+                 ),
+-            },
++                tab="slices",
++            ),
+         )
+ 
+     @app.post("/library/delete", response_model=None)
+     def library_delete(
+         request: Request,
+         name: str = Form(...),
+         _: None = Depends(require_login),
+     ) -> Response:
+         settings = request.app.state.settings
+         try:
+             delete_source(settings, name)
+         except (ValueError, FileNotFoundError) as exc:
+             return templates.TemplateResponse(
+                 request,
+                 "library.html",
+-                {
+-                    "sources": list_sources(settings),
+-                    "error": str(exc),
+-                    "message": None,
+-                },
++                _library_ctx(settings, error=str(exc), tab="slices"),
+                 status_code=400,
+             )
+         return RedirectResponse("/library", status_code=HTTP_303_SEE_OTHER)
+ 
+-    @app.post("/api/library/youtube")
+-    async def youtube_import(
++    @app.post("/library/videos/upload", response_model=None)
++    async def library_video_upload(
+         request: Request,
+-        background_tasks: BackgroundTasks,
++        file: UploadFile = File(...),
+         _: None = Depends(require_login),
+-    ) -> dict:
++    ) -> Response:
+         settings = request.app.state.settings
+-        mgr: JobManager = request.app.state.job_manager
+         try:
+-            raw = await request.body()
+-            body = YoutubeImportBody.model_validate_json(raw)
+-        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+-            raise HTTPException(
+-                status_code=400, detail="Invalid JSON body"
+-            ) from exc
++            data = await _read_upload_capped(file)
++            saved = save_video(settings, file.filename or "", data)
++        except (ValueError, FileNotFoundError) as exc:
++            return templates.TemplateResponse(
++                request,
++                "library.html",
++                _library_ctx(settings, error=str(exc), tab="videos"),
++                status_code=400,
++            )
++        return templates.TemplateResponse(
++            request,
++            "library.html",
++            _library_ctx(
++                settings,
++                message=f"Uploaded video: {saved.name}.",
++                tab="videos",
++            ),
++        )
++
++    @app.post("/library/videos/delete", response_model=None)
++    def library_video_delete(
++        request: Request,
++        name: str = Form(...),
++        _: None = Depends(require_login),
++    ) -> Response:
++        settings = request.app.state.settings
+         try:
+-            record = mgr.create_youtube(settings, body.url, body.name)
+-        except BusyError as exc:
+-            raise HTTPException(
+-                status_code=HTTP_409_CONFLICT, detail=str(exc)
+-            ) from exc
+-        except ValueError as exc:
+-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+-        background_tasks.add_task(mgr.run_youtube_job, settings, record.id)
+-        return {"id": record.id, "status": record.status}
++            delete_video(settings, name)
++        except (ValueError, FileNotFoundError) as exc:
++            return templates.TemplateResponse(
++                request,
++                "library.html",
++                _library_ctx(settings, error=str(exc), tab="videos"),
++                status_code=400,
++            )
++        return templates.TemplateResponse(
++            request,
++            "library.html",
++            _library_ctx(
++                settings,
++                message=f"Deleted video: {name}.",
++                tab="videos",
++            ),
++        )
+ 
+     @app.get("/prompt", response_class=HTMLResponse)
+     def prompt_page(
+         request: Request,
+         _: None = Depends(require_login),
+     ) -> HTMLResponse:
+         settings = request.app.state.settings
+         return templates.TemplateResponse(
+             request,
+             "prompt.html",
+@@ -346,33 +383,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+             body = CreateJobBody.model_validate_json(raw)
+         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+             raise HTTPException(
+                 status_code=400, detail="Invalid JSON body"
+             ) from exc
+         source_name = body.source_name
+         story = body.story
+         voice = body.voice or DEFAULT_VOICE
+         pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
+         speed = DEFAULT_SPEED if body.speed is None else body.speed
++        video_speed = (
++            DEFAULT_VIDEO_SPEED if body.video_speed is None else body.video_speed
++        )
+         try:
+             format_edge_pitch(pitch)
+             format_edge_rate(speed)
++            validate_video_speed(video_speed)
+         except ValueError as exc:
+             raise HTTPException(status_code=400, detail=str(exc)) from exc
+         try:
+             record = mgr.create(
+                 settings,
+                 source_name,
+                 story,
+                 voice,
+                 pitch=pitch,
+                 speed=speed,
++                video_speed=video_speed,
+                 mode=body.mode,
+                 ken_burns=body.ken_burns,
+             )
+         except BusyError as exc:
+             raise HTTPException(
+                 status_code=HTTP_409_CONFLICT,
+                 detail=str(exc),
+             ) from exc
+         except (ValueError, FileNotFoundError) as exc:
+             raise HTTPException(status_code=400, detail=str(exc)) from exc
+diff --git a/src/roblox_viral/web/config.py b/src/roblox_viral/web/config.py
+index 967df8e..1796746 100644
+--- a/src/roblox_viral/web/config.py
++++ b/src/roblox_viral/web/config.py
+@@ -29,82 +29,80 @@ def resolve_overlay_video_path(
+     return packaged if packaged.is_file() else None
+ 
+ 
+ @dataclass(frozen=True)
+ class Settings:
+     media_root: Path
+     app_password: str
+     app_secret: str
+     require_password: bool = True
+     gemini_api_key: str = ""
+-    youtube_cookies: str = ""
+     overlay_video: str = ""
+     api_key: str = ""
+ 
+     @property
+     def sources_dir(self) -> Path:
+         return self.media_root / "sources"
+ 
++    @property
++    def videos_dir(self) -> Path:
++        return self.media_root / "videos"
++
+     @property
+     def images_dir(self) -> Path:
+         return self.media_root / "images"
+ 
+     @property
+     def outputs_dir(self) -> Path:
+         return self.media_root / "outputs"
+ 
+     @property
+     def jobs_dir(self) -> Path:
+         return self.media_root / "jobs"
+ 
+     @property
+     def prompt_path(self) -> Path:
+         return self.media_root / "prompt.txt"
+ 
+-    @property
+-    def youtube_cookies_path(self) -> Path | None:
+-        """Netscape cookies file for yt-dlp, if configured or present under media/."""
+-        if self.youtube_cookies.strip():
+-            path = Path(self.youtube_cookies).expanduser()
+-            return path if path.is_file() else None
+-        default = self.media_root / "youtube_cookies.txt"
+-        return default if default.is_file() else None
+-
+     @property
+     def overlay_video_path(self) -> Path | None:
+         """Greenscreen intro overlay MP4, if configured or present under media/."""
+         return resolve_overlay_video_path(self.media_root, self.overlay_video)
+ 
+     def ensure_media_dirs(self) -> None:
+-        for d in (self.sources_dir, self.images_dir, self.outputs_dir, self.jobs_dir):
++        for d in (
++            self.sources_dir,
++            self.videos_dir,
++            self.images_dir,
++            self.outputs_dir,
++            self.jobs_dir,
++        ):
+             d.mkdir(parents=True, exist_ok=True)
+ 
+     @classmethod
+     def from_env(cls) -> Settings:
+         media = Path(os.environ.get("MEDIA_ROOT", "media")).resolve()
+         password = os.environ.get("APP_PASSWORD", "")
+         secret = os.environ.get("APP_SECRET", "")
+         require = os.environ.get("APP_REQUIRE_PASSWORD", "1") not in ("0", "false", "False")
+         if require and not password:
+             raise RuntimeError("APP_PASSWORD is required")
+         if not secret:
+             secret = secrets.token_hex(32)
+             warnings.warn("APP_SECRET unset; using ephemeral secret (sessions reset on restart)", stacklevel=2)
+         gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+-        youtube_cookies = os.environ.get("YOUTUBE_COOKIES", "")
+         overlay_video = os.environ.get("OVERLAY_VIDEO", "")
+         api_key = os.environ.get("API_KEY", "")
+         return cls(
+             media_root=media,
+             app_password=password,
+             app_secret=secret,
+             require_password=require,
+             gemini_api_key=gemini_api_key,
+-            youtube_cookies=youtube_cookies,
+             overlay_video=overlay_video,
+             api_key=api_key,
+         )
+ 
+ 
+ @lru_cache
+ def get_settings() -> Settings:
+     return Settings.from_env()
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index f617e46..f8c84b2 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -9,46 +9,40 @@ from datetime import datetime, timezone
+ from typing import Literal
+ 
+ from pathlib import Path
+ 
+ from roblox_viral.captions import write_ass
+ from roblox_viral.render import render_still, render_video
+ from roblox_viral.story import join_for_tts, split_sentences
+ from roblox_viral.voice import (
+     DEFAULT_PITCH,
+     DEFAULT_SPEED,
++    DEFAULT_VIDEO_SPEED,
+     EdgeTTSProvider,
+     format_edge_pitch,
+     format_edge_rate,
++    validate_video_speed,
+ )
+ from roblox_viral.web.config import Settings
+ from roblox_viral.web.library import (
+     make_output_name,
+     resolve_image,
+-    resolve_source,
+-    slice_into_minute_parts,
++    resolve_roblox_media,
+     validate_image_filename,
+     validate_video_filename,
+ )
+-from roblox_viral.web.youtube import (
+-    download_youtube,
+-    validate_stem,
+-    validate_youtube_url,
+-)
+ 
+ JobStatus = Literal[
+     "queued",
+     "synthesizing",
+     "captioning",
+     "rendering",
+-    "downloading",
+-    "slicing",
+     "done",
+     "error",
+ ]
+ 
+ # uuid4().hex — reject path traversal / odd filenames
+ _SAFE_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
+ 
+ 
+ class BusyError(Exception):
+     """Raised when a job is already active (single-flight)."""
+@@ -56,23 +50,24 @@ class BusyError(Exception):
+ 
+ @dataclass
+ class JobRecord:
+     id: str
+     status: JobStatus
+     error: str | None
+     source_name: str
+     voice: str
+     output_name: str | None
+     created_at: str
+-    kind: str = "render"  # "render" | "youtube"
++    kind: str = "render"
+     pitch: int = DEFAULT_PITCH
+     speed: int = DEFAULT_SPEED
++    video_speed: int = DEFAULT_VIDEO_SPEED
+     mode: str = "roblox"  # "roblox" | "picture"
+     ken_burns: bool = False
+     url: str | None = None
+     stem: str | None = None
+     created_slices: list[str] | None = None
+     ephemeral: bool = False
+ 
+ 
+ class JobManager:
+     """In-memory job store with single-flight pipeline execution."""
+@@ -84,61 +79,64 @@ class JobManager:
+         self._stories: dict[str, str] = {}
+ 
+     def create(
+         self,
+         settings: Settings,
+         source_name: str,
+         story: str,
+         voice: str,
+         pitch: int = DEFAULT_PITCH,
+         speed: int = DEFAULT_SPEED,
++        video_speed: int = DEFAULT_VIDEO_SPEED,
+         mode: str = "roblox",
+         ken_burns: bool = False,
+         ephemeral: bool = False,
+     ) -> JobRecord:
+         format_edge_pitch(pitch)
+         format_edge_rate(speed)
++        validate_video_speed(video_speed)
+         if mode not in ("roblox", "picture"):
+             raise ValueError(f"Invalid mode: {mode!r}")
+         if ephemeral:
+             safe = Path(source_name).name
+             if safe != source_name or not safe:
+                 raise ValueError("Invalid source_name")
+             if mode == "picture":
+                 source_name = validate_image_filename(safe)
+             else:
+                 source_name = validate_video_filename(safe)
+                 ken_burns = False
+         elif mode == "picture":
+             resolve_image(settings, source_name)
+         else:
+-            resolve_source(settings, source_name)
++            resolve_roblox_media(settings, source_name)
+             ken_burns = False
+         sentences = split_sentences(story)
+         if not sentences:
+             raise ValueError("Story is empty")
+ 
+         with self._lock:
+             if self._active_id is not None:
+                 raise BusyError("A job is already in progress")
+             job_id = uuid.uuid4().hex
+             record = JobRecord(
+                 id=job_id,
+                 status="queued",
+                 error=None,
+                 source_name=source_name,
+                 voice=voice,
+                 output_name=None,
+                 created_at=datetime.now(timezone.utc).isoformat(),
+                 kind="render",
+                 pitch=pitch,
+                 speed=speed,
++                video_speed=video_speed,
+                 mode=mode,
+                 ken_burns=ken_burns,
+                 ephemeral=ephemeral,
+             )
+             self._jobs[job_id] = record
+             self._stories[job_id] = story
+             self._active_id = job_id
+ 
+         try:
+             job_dir = settings.jobs_dir / job_id
+@@ -146,55 +144,20 @@ class JobManager:
+             self._persist(settings, record)
+         except Exception:
+             with self._lock:
+                 if self._active_id == job_id:
+                     self._active_id = None
+                 self._jobs.pop(job_id, None)
+                 self._stories.pop(job_id, None)
+             raise
+         return record
+ 
+-    def create_youtube(self, settings: Settings, url: str, stem: str) -> JobRecord:
+-        safe_url = validate_youtube_url(url)
+-        safe_stem = validate_stem(stem)
+-
+-        with self._lock:
+-            if self._active_id is not None:
+-                raise BusyError("A job is already in progress")
+-            job_id = uuid.uuid4().hex
+-            record = JobRecord(
+-                id=job_id,
+-                status="queued",
+-                error=None,
+-                source_name="",
+-                voice="",
+-                output_name=None,
+-                created_at=datetime.now(timezone.utc).isoformat(),
+-                kind="youtube",
+-                url=safe_url,
+-                stem=safe_stem,
+-                created_slices=None,
+-            )
+-            self._jobs[job_id] = record
+-            self._active_id = job_id
+-
+-        try:
+-            (settings.jobs_dir / job_id).mkdir(parents=True, exist_ok=True)
+-            self._persist(settings, record)
+-        except Exception:
+-            with self._lock:
+-                if self._active_id == job_id:
+-                    self._active_id = None
+-                self._jobs.pop(job_id, None)
+-            raise
+-        return record
+-
+     def get(self, job_id: str, settings: Settings | None = None) -> JobRecord | None:
+         with self._lock:
+             cached = self._jobs.get(job_id)
+             if cached is not None:
+                 return cached
+ 
+         if settings is None or not _SAFE_JOB_ID.fullmatch(job_id):
+             return None
+ 
+         jobs_root = settings.jobs_dir.resolve()
+@@ -208,20 +171,23 @@ class JobManager:
+                 id=str(data["id"]),
+                 status=data["status"],
+                 error=data.get("error"),
+                 source_name=str(data.get("source_name") or ""),
+                 voice=str(data.get("voice") or ""),
+                 output_name=data.get("output_name"),
+                 created_at=str(data["created_at"]),
+                 kind=str(data.get("kind") or "render"),
+                 pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
+                 speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
++                video_speed=int(data["video_speed"])
++                if "video_speed" in data
++                else DEFAULT_VIDEO_SPEED,
+                 mode=str(data.get("mode") or "roblox"),
+                 ken_burns=bool(data.get("ken_burns", False)),
+                 url=data.get("url"),
+                 stem=data.get("stem"),
+                 created_slices=data.get("created_slices"),
+                 ephemeral=bool(data.get("ephemeral", False)),
+             )
+         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+             return None
+ 
+@@ -267,81 +233,52 @@ class JobManager:
+             if record.ephemeral:
+                 media_path = (job_dir / record.source_name).resolve()
+                 if (
+                     not media_path.is_relative_to(job_dir.resolve())
+                     or not media_path.is_file()
+                 ):
+                     raise FileNotFoundError(record.source_name)
+             elif record.mode == "picture":
+                 media_path = resolve_image(settings, record.source_name)
+             else:
+-                media_path = resolve_source(settings, record.source_name)
++                media_path = resolve_roblox_media(settings, record.source_name)
+ 
+             if record.mode == "picture":
+                 render_still(
+                     image_path=media_path,
+                     audio_path=narration_path,
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     ken_burns=record.ken_burns,
+                     work_dir=job_dir,
+                 )
+             else:
+                 render_video(
+                     video_path=media_path,
+                     audio_path=narration_path,
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     work_dir=job_dir,
+                     overlay_path=settings.overlay_video_path,
++                    video_speed=record.video_speed,
+                 )
+ 
+             record.output_name = output_name
+             self._set_status(settings, record, "done")
+         except Exception as exc:
+             record.error = str(exc)
+             self._set_status(settings, record, "error")
+         finally:
+             with self._lock:
+                 if self._active_id == job_id:
+                     self._active_id = None
+ 
+-    def run_youtube_job(self, settings: Settings, job_id: str) -> None:
+-        record = self._jobs.get(job_id)
+-        if record is None:
+-            raise KeyError(f"Unknown job: {job_id}")
+-        job_dir = settings.jobs_dir / job_id
+-        download_path = job_dir / "download.mp4"
+-        try:
+-            self._set_status(settings, record, "downloading")
+-            download_youtube(
+-                record.url or "",
+-                download_path,
+-                cookies_path=settings.youtube_cookies_path,
+-            )
+-
+-            self._set_status(settings, record, "slicing")
+-            slices = slice_into_minute_parts(
+-                settings, download_path, record.stem or "video"
+-            )
+-            record.created_slices = [s.name for s in slices]
+-            self._set_status(settings, record, "done")
+-        except Exception as exc:
+-            record.error = str(exc)
+-            self._set_status(settings, record, "error")
+-        finally:
+-            download_path.unlink(missing_ok=True)
+-            download_path.with_suffix("").unlink(missing_ok=True)
+-            with self._lock:
+-                if self._active_id == job_id:
+-                    self._active_id = None
+-
+     def _set_status(
+         self, settings: Settings, record: JobRecord, status: JobStatus
+     ) -> None:
+         record.status = status
+         self._persist(settings, record)
+ 
+     def _persist(self, settings: Settings, record: JobRecord) -> None:
+         path = settings.jobs_dir / record.id / "status.json"
+         path.parent.mkdir(parents=True, exist_ok=True)
+         path.write_text(json.dumps(asdict(record), indent=2), encoding="utf-8")
+diff --git a/src/roblox_viral/web/library.py b/src/roblox_viral/web/library.py
+index d2e089f..f6d0687 100644
+--- a/src/roblox_viral/web/library.py
++++ b/src/roblox_viral/web/library.py
+@@ -24,20 +24,28 @@ class SourceVideo:
+     size_bytes: int
+ 
+ 
+ @dataclass(frozen=True)
+ class SourceImage:
+     name: str
+     path: Path
+     size_bytes: int
+ 
+ 
++@dataclass(frozen=True)
++class RobloxSource:
++    name: str
++    kind: str  # "slice" | "video"
++    path: Path
++    size_bytes: int
++
++
+ @dataclass(frozen=True)
+ class OutputVideo:
+     name: str
+     path: Path
+     size_bytes: int
+ 
+ 
+ def _safe_name(name: str) -> str:
+     base = Path(name).name
+     if base != name or not _SAFE_NAME.match(base):
+@@ -71,20 +79,37 @@ def _commit_image_upload(images_dir: Path, safe: str, data: bytes) -> Path:
+                 fh.write(data)
+         except FileExistsError:
+             dest = images_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
+             continue
+         except BaseException:
+             dest.unlink(missing_ok=True)
+             raise
+         return dest
+ 
+ 
++def _commit_video_upload(videos_dir: Path, safe: str, data: bytes) -> Path:
++    stem = Path(safe).stem
++    suffix = Path(safe).suffix.lower()
++    dest = videos_dir / safe
++    while True:
++        try:
++            with open(dest, "xb") as fh:
++                fh.write(data)
++        except FileExistsError:
++            dest = videos_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
++            continue
++        except BaseException:
++            dest.unlink(missing_ok=True)
++            raise
++        return dest
++
++
+ def plan_full_minute_count(duration_seconds: float) -> int:
+     """How many complete 1-minute slices to keep (tail under 60s discarded)."""
+     if duration_seconds < 0:
+         return 0
+     return int(duration_seconds // SLICE_SECONDS)
+ 
+ 
+ def slice_part_name(stem: str, part: int) -> str:
+     """e.g. gameplay + 1 → gameplay-1.mp4"""
+     return f"{stem}-{part}.mp4"
+@@ -101,20 +126,30 @@ def make_output_name(source_name: str, when: datetime | None = None) -> str:
+ 
+ 
+ def list_sources(settings: Settings) -> list[SourceVideo]:
+     items: list[SourceVideo] = []
+     for path in sorted(settings.sources_dir.iterdir()):
+         if path.is_file() and _SAFE_NAME.match(path.name) and not path.name.startswith("."):
+             items.append(SourceVideo(path.name, path, path.stat().st_size))
+     return items
+ 
+ 
++def list_videos(settings: Settings) -> list[SourceVideo]:
++    items: list[SourceVideo] = []
++    if not settings.videos_dir.is_dir():
++        return items
++    for path in sorted(settings.videos_dir.iterdir()):
++        if path.is_file() and _SAFE_NAME.match(path.name) and not path.name.startswith("."):
++            items.append(SourceVideo(path.name, path, path.stat().st_size))
++    return items
++
++
+ def list_images(settings: Settings) -> list[SourceImage]:
+     items: list[SourceImage] = []
+     if not settings.images_dir.is_dir():
+         return items
+     for path in sorted(settings.images_dir.iterdir()):
+         if path.is_file() and _SAFE_IMAGE_NAME.match(path.name) and not path.name.startswith("."):
+             items.append(SourceImage(path.name, path, path.stat().st_size))
+     return items
+ 
+ 
+@@ -131,20 +166,30 @@ def list_outputs(settings: Settings, *, limit: int = 10) -> list[OutputVideo]:
+ def resolve_source(settings: Settings, name: str) -> Path:
+     safe = _safe_name(name)
+     path = (settings.sources_dir / safe).resolve()
+     if not path.is_relative_to(settings.sources_dir.resolve()):
+         raise ValueError("Invalid path")
+     if not path.is_file():
+         raise FileNotFoundError(safe)
+     return path
+ 
+ 
++def resolve_video(settings: Settings, name: str) -> Path:
++    safe = _safe_name(name)
++    path = (settings.videos_dir / safe).resolve()
++    if not path.is_relative_to(settings.videos_dir.resolve()):
++        raise ValueError("Invalid path")
++    if not path.is_file():
++        raise FileNotFoundError(safe)
++    return path
++
++
+ def resolve_image(settings: Settings, name: str) -> Path:
+     safe = _safe_image_name(name)
+     path = (settings.images_dir / safe).resolve()
+     if not path.is_relative_to(settings.images_dir.resolve()):
+         raise ValueError("Invalid path")
+     if not path.is_file():
+         raise FileNotFoundError(safe)
+     return path
+ 
+ 
+@@ -242,27 +287,58 @@ def save_upload(settings: Settings, filename: str, data: bytes) -> list[SourceVi
+     stem = Path(safe).stem
+     suffix = Path(safe).suffix.lower() or ".mp4"
+     temp = settings.sources_dir / f".upload-{uuid.uuid4().hex}{suffix}"
+     try:
+         temp.write_bytes(data)
+         return slice_into_minute_parts(settings, temp, stem)
+     finally:
+         temp.unlink(missing_ok=True)
+ 
+ 
++def save_video(settings: Settings, filename: str, data: bytes) -> SourceVideo:
++    if len(data) > MAX_UPLOAD_BYTES:
++        raise ValueError(
++            f"Upload exceeds maximum size of {MAX_UPLOAD_BYTES} bytes"
++        )
++    safe = _safe_name(filename)
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    dest = _commit_video_upload(settings.videos_dir, safe, data)
++    return SourceVideo(dest.name, dest, dest.stat().st_size)
++
++
+ def save_image(settings: Settings, filename: str, data: bytes) -> SourceImage:
+     if len(data) > MAX_IMAGE_UPLOAD_BYTES:
+         raise ValueError(
+             f"Upload exceeds maximum size of {MAX_IMAGE_UPLOAD_BYTES} bytes"
+         )
+     safe = _safe_image_name(filename)
+     settings.images_dir.mkdir(parents=True, exist_ok=True)
+     dest = _commit_image_upload(settings.images_dir, safe, data)
+     return SourceImage(dest.name, dest, dest.stat().st_size)
+ 
+ 
+ def delete_source(settings: Settings, name: str) -> None:
+     resolve_source(settings, name).unlink()
+ 
+ 
++def delete_video(settings: Settings, name: str) -> None:
++    resolve_video(settings, name).unlink()
++
++
+ def delete_image(settings: Settings, name: str) -> None:
+     resolve_image(settings, name).unlink()
++
++
++def resolve_roblox_media(settings: Settings, name: str) -> Path:
++    try:
++        return resolve_source(settings, name)
++    except FileNotFoundError:
++        return resolve_video(settings, name)
++
++
++def list_roblox_sources(settings: Settings) -> list[RobloxSource]:
++    out: list[RobloxSource] = []
++    for s in list_sources(settings):
++        out.append(RobloxSource(s.name, "slice", s.path, s.size_bytes))
++    for v in list_videos(settings):
++        out.append(RobloxSource(v.name, "video", v.path, v.size_bytes))
++    return out
+diff --git a/src/roblox_viral/web/static/app.js b/src/roblox_viral/web/static/app.js
+index daf8040..5c77256 100644
+--- a/src/roblox_viral/web/static/app.js
++++ b/src/roblox_viral/web/static/app.js
+@@ -34,166 +34,80 @@
+         storyBtn.disabled = false;
+       }
+     });
+   }
+ 
+   const form = document.getElementById("generate-form");
+   if (!form) return;
+ 
+   const pitchInput = document.getElementById("pitch");
+   const speedInput = document.getElementById("speed");
++  const videoSpeedInput = document.getElementById("video_speed");
+   const pitchValue = document.getElementById("pitch-value");
+   const speedValue = document.getElementById("speed-value");
++  const videoSpeedValue = document.getElementById("video-speed-value");
++  const videoSpeedField = document.getElementById("video-speed-field");
+ 
+   function formatPitchLabel(n) {
+     const v = Number(n);
+     return (v > 0 ? "+" : "") + v + "%";
+   }
+   function formatSpeedLabel(n) {
+     return Number(n) + "%";
+   }
+   function syncVoiceSliders() {
+     if (pitchValue) pitchValue.textContent = formatPitchLabel(pitchInput.value);
+     if (speedValue) speedValue.textContent = formatSpeedLabel(speedInput.value);
++    if (videoSpeedValue && videoSpeedInput) {
++      videoSpeedValue.textContent = formatSpeedLabel(videoSpeedInput.value);
++    }
+   }
+   if (pitchInput && speedInput) {
+     pitchInput.addEventListener("input", syncVoiceSliders);
+     speedInput.addEventListener("input", syncVoiceSliders);
++    if (videoSpeedInput) videoSpeedInput.addEventListener("input", syncVoiceSliders);
+     syncVoiceSliders();
+   }
+ 
+   const generateBtn = document.getElementById("generate-btn");
+   const tabRoblox = document.getElementById("tab-roblox");
+   const tabPicture = document.getElementById("tab-picture");
+   const robloxBlock = document.getElementById("roblox-source-block");
+   const pictureBlock = document.getElementById("picture-source-block");
+   const sourceSelect = document.getElementById("source_name");
+   const imageSelect = document.getElementById("image_name");
+-  const imageFile = document.getElementById("image-file");
+-  const imageUploadBtn = document.getElementById("image-upload-btn");
+-  const imageDeleteBtn = document.getElementById("image-delete-btn");
+-  const imageErr = document.getElementById("image-error");
+   const kenBurnsEl = document.getElementById("ken_burns");
+   let currentMode = "roblox";
+-
+-  function showImageError(message) {
+-    if (!imageErr) return;
+-    imageErr.hidden = false;
+-    imageErr.textContent = message;
+-  }
+-  function clearImageError() {
+-    if (!imageErr) return;
+-    imageErr.hidden = true;
+-    imageErr.textContent = "";
+-  }
+   function imageSelectHasValue() {
+     return Boolean(imageSelect && imageSelect.value);
+   }
+   function syncGenerateEnabled() {
+     if (!generateBtn) return;
+     if (currentMode === "picture") {
+       generateBtn.disabled = !imageSelectHasValue();
+     } else {
+       generateBtn.disabled = !(sourceSelect && sourceSelect.value);
+     }
+   }
+   function setMode(mode) {
+     currentMode = mode;
+     const isPicture = mode === "picture";
+     if (robloxBlock) robloxBlock.hidden = isPicture;
+     if (pictureBlock) pictureBlock.hidden = !isPicture;
++    if (videoSpeedField) videoSpeedField.hidden = isPicture;
+     if (tabRoblox) tabRoblox.setAttribute("aria-selected", isPicture ? "false" : "true");
+     if (tabPicture) tabPicture.setAttribute("aria-selected", isPicture ? "true" : "false");
+     syncGenerateEnabled();
+   }
+   if (tabRoblox) tabRoblox.addEventListener("click", () => setMode("roblox"));
+   if (tabPicture) tabPicture.addEventListener("click", () => setMode("picture"));
+ 
+-  if (imageUploadBtn && imageFile && imageSelect) {
+-    imageUploadBtn.addEventListener("click", async () => {
+-      clearImageError();
+-      const file = imageFile.files && imageFile.files[0];
+-      if (!file) {
+-        showImageError("Choose an image file first");
+-        return;
+-      }
+-      const data = new FormData();
+-      data.append("file", file, file.name);
+-      imageUploadBtn.disabled = true;
+-      try {
+-        const res = await fetch("/api/images", {
+-          method: "POST",
+-          headers: { Accept: "application/json" },
+-          body: data,
+-        });
+-        const body = await res.json().catch(() => ({}));
+-        if (!res.ok) {
+-          showImageError(body.detail || `Upload failed (${res.status})`);
+-          return;
+-        }
+-        const empty = imageSelect.querySelector("option[disabled]");
+-        if (empty) empty.remove();
+-        const opt = document.createElement("option");
+-        opt.value = body.name;
+-        opt.textContent = body.name;
+-        imageSelect.append(opt);
+-        imageSelect.value = body.name;
+-        if (imageDeleteBtn) imageDeleteBtn.disabled = false;
+-        imageFile.value = "";
+-        syncGenerateEnabled();
+-      } catch (err) {
+-        showImageError(err.message || String(err));
+-      } finally {
+-        imageUploadBtn.disabled = false;
+-      }
+-    });
+-  }
+-
+-  if (imageDeleteBtn && imageSelect) {
+-    imageDeleteBtn.addEventListener("click", async () => {
+-      clearImageError();
+-      const name = imageSelect.value;
+-      if (!name) return;
+-      imageDeleteBtn.disabled = true;
+-      try {
+-        const res = await fetch("/api/images/" + encodeURIComponent(name), {
+-          method: "DELETE",
+-          headers: { Accept: "application/json" },
+-        });
+-        const body = await res.json().catch(() => ({}));
+-        if (!res.ok) {
+-          showImageError(body.detail || `Delete failed (${res.status})`);
+-          imageDeleteBtn.disabled = false;
+-          return;
+-        }
+-        const opt = imageSelect.querySelector('option[value="' + CSS.escape(name) + '"]');
+-        if (opt) opt.remove();
+-        if (!imageSelect.options.length) {
+-          const placeholder = document.createElement("option");
+-          placeholder.value = "";
+-          placeholder.disabled = true;
+-          placeholder.selected = true;
+-          placeholder.textContent = "No images — upload below";
+-          imageSelect.append(placeholder);
+-          imageDeleteBtn.disabled = true;
+-        } else {
+-          imageSelect.selectedIndex = 0;
+-          imageDeleteBtn.disabled = false;
+-        }
+-        syncGenerateEnabled();
+-      } catch (err) {
+-        showImageError(err.message || String(err));
+-        imageDeleteBtn.disabled = false;
+-      }
+-    });
+-  }
+-
+   const statusEl = document.getElementById("status");
+   const errorEl = document.getElementById("error");
+   const resultEl = document.getElementById("result");
+   const player = document.getElementById("player");
+   const download = document.getElementById("download");
+ 
+   let pollTimer = null;
+ 
+   function setStatus(text) {
+     statusEl.textContent = text;
+@@ -289,20 +203,21 @@
+     const payload = {
+       mode: currentMode,
+       source_name:
+         currentMode === "picture"
+           ? document.getElementById("image_name").value
+           : document.getElementById("source_name").value,
+       story: document.getElementById("story").value,
+       voice: document.getElementById("voice").value,
+       pitch: Number(document.getElementById("pitch").value),
+       speed: Number(document.getElementById("speed").value),
++      video_speed: Number(document.getElementById("video_speed").value),
+       ken_burns:
+         currentMode === "picture" &&
+         Boolean(document.getElementById("ken_burns") && document.getElementById("ken_burns").checked),
+     };
+ 
+     generateBtn.disabled = true;
+     setStatus("starting");
+ 
+     try {
+       const res = await fetch("/api/jobs", {
+diff --git a/src/roblox_viral/web/static/library.js b/src/roblox_viral/web/static/library.js
+index 42f62c8..c2d1266 100644
+--- a/src/roblox_viral/web/static/library.js
++++ b/src/roblox_viral/web/static/library.js
+@@ -1,105 +1,76 @@
+ (() => {
+-  const form = document.getElementById("youtube-form");
+-  if (!form) return;
++  const tabs = [...document.querySelectorAll('[role="tab"]')];
+ 
+-  const statusEl = document.getElementById("yt-status");
+-  const errorEl = document.getElementById("yt-error");
+-  const messageEl = document.getElementById("yt-message");
+-  const btn = document.getElementById("youtube-btn");
+-  let pollTimer = null;
+-
+-  function setStatus(t) {
+-    statusEl.textContent = t;
+-  }
+-  function showError(msg) {
+-    errorEl.hidden = false;
+-    errorEl.textContent = msg;
+-    messageEl.hidden = true;
+-  }
+-  function showMessage(msg) {
+-    messageEl.hidden = false;
+-    messageEl.textContent = msg;
+-    errorEl.hidden = true;
+-  }
+-  function clearFeedback() {
+-    errorEl.hidden = true;
+-    errorEl.textContent = "";
+-    messageEl.hidden = true;
+-    messageEl.textContent = "";
+-  }
+-  function stopPolling() {
+-    if (pollTimer !== null) {
+-      clearInterval(pollTimer);
+-      pollTimer = null;
++  function selectTab(selected, moveFocus = false) {
++    for (const tab of tabs) {
++      const active = tab === selected;
++      tab.setAttribute("aria-selected", String(active));
++      tab.tabIndex = active ? 0 : -1;
++      document.getElementById(tab.getAttribute("aria-controls")).hidden = !active;
+     }
++    if (moveFocus) selected.focus();
+   }
+ 
+-  async function pollJob(jobId) {
+-    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {
+-      headers: { Accept: "application/json" },
++  for (const tab of tabs) {
++    tab.addEventListener("click", () => selectTab(tab));
++    tab.addEventListener("keydown", (event) => {
++      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
++      event.preventDefault();
++      const current = tabs.indexOf(tab);
++      const next =
++        event.key === "Home" ? 0 :
++        event.key === "End" ? tabs.length - 1 :
++        event.key === "ArrowRight" ? (current + 1) % tabs.length :
++        (current - 1 + tabs.length) % tabs.length;
++      selectTab(tabs[next], true);
+     });
+-    if (!res.ok) throw new Error(`Status request failed (${res.status})`);
+-    const job = await res.json();
+-    setStatus(job.status);
+-    if (job.status === "done") {
+-      stopPolling();
+-      btn.disabled = false;
+-      const slices = (job.created_slices || []).join(", ");
+-      showMessage(slices ? `Created: ${slices}` : "Import complete.");
+-      window.setTimeout(() => window.location.reload(), 800);
+-      return;
+-    }
+-    if (job.status === "error") {
+-      stopPolling();
+-      btn.disabled = false;
+-      showError(job.error || "Import failed");
++  }
++
++  const status = document.getElementById("image-status");
++  const uploadForm = document.getElementById("image-upload-form");
++
++  async function responseError(response) {
++    try {
++      const body = await response.json();
++      return body.detail || "Request failed.";
++    } catch {
++      return "Request failed.";
+     }
+   }
+ 
+-  form.addEventListener("submit", async (event) => {
++  uploadForm?.addEventListener("submit", async (event) => {
+     event.preventDefault();
+-    clearFeedback();
+-    stopPolling();
+-    btn.disabled = true;
+-    setStatus("starting");
++    const button = uploadForm.querySelector('button[type="submit"]');
++    button.disabled = true;
++    status.textContent = "Uploading image…";
+     try {
+-      const res = await fetch("/api/library/youtube", {
++      const response = await fetch("/api/images", {
+         method: "POST",
+-        headers: {
+-          "Content-Type": "application/json",
+-          Accept: "application/json",
+-        },
+-        body: JSON.stringify({
+-          url: document.getElementById("youtube_url").value,
+-          name: document.getElementById("youtube_name").value,
+-        }),
++        body: new FormData(uploadForm),
+       });
+-      const body = await res.json().catch(() => ({}));
+-      if (res.status === 409) {
+-        btn.disabled = false;
+-        setStatus("busy");
+-        showError(body.detail || "A job is already in progress");
+-        return;
+-      }
+-      if (!res.ok) {
+-        btn.disabled = false;
+-        setStatus("error");
+-        showError(body.detail || `Import failed (${res.status})`);
+-        return;
+-      }
+-      setStatus(body.status || "queued");
+-      pollTimer = setInterval(() => {
+-        pollJob(body.id).catch((err) => {
+-          stopPolling();
+-          btn.disabled = false;
+-          showError(err.message || String(err));
+-        });
+-      }, 1000);
+-      await pollJob(body.id);
+-    } catch (err) {
+-      btn.disabled = false;
+-      setStatus("error");
+-      showError(err.message || String(err));
++      if (!response.ok) throw new Error(await responseError(response));
++      window.location.assign("/library?tab=images");
++    } catch (error) {
++      status.textContent = error instanceof Error ? error.message : "Request failed.";
++      button.disabled = false;
+     }
+   });
++
++  for (const button of document.querySelectorAll(".image-delete")) {
++    button.addEventListener("click", async () => {
++      button.disabled = true;
++      status.textContent = `Deleting ${button.dataset.name}…`;
++      try {
++        const response = await fetch(
++          `/api/images/${encodeURIComponent(button.dataset.name)}`,
++          { method: "DELETE" },
++        );
++        if (!response.ok) throw new Error(await responseError(response));
++        window.location.assign("/library?tab=images");
++      } catch (error) {
++        status.textContent = error instanceof Error ? error.message : "Request failed.";
++        button.disabled = false;
++      }
++    });
++  }
+ })();
+diff --git a/src/roblox_viral/web/templates/generate.html b/src/roblox_viral/web/templates/generate.html
+index 9beb94e..230c5fa 100644
+--- a/src/roblox_viral/web/templates/generate.html
++++ b/src/roblox_viral/web/templates/generate.html
+@@ -11,49 +11,40 @@
+     </div>
+ 
+     <div id="roblox-source-block">
+       <label>
+         Source video
+         <select id="source_name" name="source_name">
+           {% if not sources %}
+           <option value="" disabled selected>No sources — upload in Library</option>
+           {% else %}
+           {% for s in sources %}
+-          <option value="{{ s.name }}">{{ s.name }}</option>
++          <option value="{{ s.name }}">{{ s.name }} {% if s.kind == "slice" %}(1m){% else %}(video){% endif %}</option>
+           {% endfor %}
+           {% endif %}
+         </select>
+       </label>
+     </div>
+ 
+     <div id="picture-source-block" hidden>
+       <label>
+         Source image
+         <select id="image_name" name="image_name">
+           {% if not images %}
+-          <option value="" disabled selected>No images — upload below</option>
++          <option value="" disabled selected>No images — upload in Library</option>
+           {% else %}
+           {% for img in images %}
+           <option value="{{ img.name }}">{{ img.name }}</option>
+           {% endfor %}
+           {% endif %}
+         </select>
+       </label>
+-      <div class="image-actions">
+-        <label>
+-          Upload image
+-          <input id="image-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+-        </label>
+-        <button id="image-upload-btn" type="button">Upload</button>
+-        <button id="image-delete-btn" type="button"{% if not images %} disabled{% endif %}>Delete</button>
+-      </div>
+-      <p id="image-error" class="error" hidden></p>
+       <label class="checkbox-field">
+         <input id="ken_burns" name="ken_burns" type="checkbox">
+         Ken Burns (slow zoom-in)
+       </label>
+     </div>
+ 
+     <label>
+       Story
+       <textarea id="story" name="story" rows="10" required placeholder="One sentence per line."></textarea>
+     </label>
+@@ -76,20 +67,25 @@
+     <label class="slider-field">
+       Pitch <span id="pitch-value">+15%</span>
+       <input id="pitch" name="pitch" type="range" min="-100" max="100" step="1" value="15" />
+     </label>
+ 
+     <label class="slider-field">
+       Speed <span id="speed-value">130%</span>
+       <input id="speed" name="speed" type="range" min="50" max="200" step="1" value="130" />
+     </label>
+ 
++    <label class="slider-field" id="video-speed-field">
++      Video speed <span id="video-speed-value">100%</span>
++      <input id="video_speed" name="video_speed" type="range" min="50" max="200" step="1" value="100" />
++    </label>
++
+     <button id="generate-btn" type="submit"{% if not sources %} disabled{% endif %}>Generate</button>
+   </form>
+ 
+   <section class="progress" aria-live="polite">
+     <p>Status: <span id="status">idle</span></p>
+     <p id="error" class="error" hidden></p>
+   </section>
+ 
+   <section class="result" id="result" hidden>
+     <video id="player" controls playsinline></video>
+diff --git a/src/roblox_viral/web/templates/library.html b/src/roblox_viral/web/templates/library.html
+index b461a49..4af18ea 100644
+--- a/src/roblox_viral/web/templates/library.html
++++ b/src/roblox_viral/web/templates/library.html
+@@ -1,67 +1,129 @@
+ {% extends "base.html" %}
+ {% block title %}Library — Roblox Viral{% endblock %}
+ {% block content %}
+   <h1>Library</h1>
+-  <p class="lede">
+-    Upload a gameplay clip or import from YouTube. Clips are split into
+-    <strong>1-minute slices</strong> named <code>name-1.mp4</code>,
+-    <code>name-2.mp4</code>, …
+-    A leftover shorter than 1 minute is discarded.
+-    Pick a slice on the Generate page.
+-  </p>
++  <p class="lede">Manage source media used to generate your videos.</p>
+ 
+   {% if error %}
+-  <p class="error">{{ error }}</p>
++  <p class="error" role="alert">{{ error }}</p>
+   {% endif %}
+   {% if message %}
+-  <p class="ok">{{ message }}</p>
++  <p class="ok" role="status">{{ message }}</p>
+   {% endif %}
+ 
+-  <form class="upload-form" method="post" action="/library/upload" enctype="multipart/form-data">
+-    <label>
+-      Video file
+-      <input type="file" name="file" accept=".mp4,.mov,.webm,.mkv,video/*" required>
+-    </label>
+-    <button type="submit">Upload</button>
+-  </form>
++  <div class="mode-tabs" role="tablist" aria-label="Library media">
++    <button id="tab-slices" type="button" role="tab"
++            aria-selected="{{ 'true' if tab == 'slices' else 'false' }}"
++            aria-controls="panel-slices"
++            tabindex="{{ '0' if tab == 'slices' else '-1' }}">
++      1-minute clips
++    </button>
++    <button id="tab-videos" type="button" role="tab"
++            aria-selected="{{ 'true' if tab == 'videos' else 'false' }}"
++            aria-controls="panel-videos"
++            tabindex="{{ '0' if tab == 'videos' else '-1' }}">
++      Videos
++    </button>
++    <button id="tab-images" type="button" role="tab"
++            aria-selected="{{ 'true' if tab == 'images' else 'false' }}"
++            aria-controls="panel-images"
++            tabindex="{{ '0' if tab == 'images' else '-1' }}">
++      Images
++    </button>
++  </div>
+ 
+-  <h2>Import from YouTube</h2>
+-  <form id="youtube-form" class="upload-form">
+-    <label>
+-      YouTube URL
+-      <input id="youtube_url" name="url" type="url" required placeholder="https://www.youtube.com/watch?v=...">
+-    </label>
+-    <label>
+-      Name (slice prefix)
+-      <input id="youtube_name" name="name" type="text" required placeholder="gameplay" pattern="[A-Za-z0-9._ \-]+" title="Letters, numbers, spaces, . _ -">
+-    </label>
+-    <button id="youtube-btn" type="submit">Import from YouTube</button>
+-  </form>
++  <section id="panel-slices" role="tabpanel" aria-labelledby="tab-slices"
++           {% if tab != "slices" %}hidden{% endif %}>
++    <h2>1-minute clips</h2>
++    <p class="lede">
++      Upload a gameplay video to split it into complete one-minute clips.
++      Any shorter remainder is discarded.
++    </p>
++    <form class="upload-form" method="post" action="/library/upload"
++          enctype="multipart/form-data">
++      <label for="slice-file">Video file</label>
++      <input id="slice-file" type="file" name="file"
++             accept=".mp4,.mov,.webm,.mkv,video/*" required>
++      <button type="submit">Upload and slice</button>
++    </form>
+ 
+-  <section class="progress" aria-live="polite">
+-    <p>Import status: <span id="yt-status">idle</span></p>
+-    <p id="yt-error" class="error" hidden></p>
+-    <p id="yt-message" class="ok" hidden></p>
++    {% if sources %}
++    <ul class="source-list">
++      {% for source in sources %}
++      <li>
++        <span>{{ source.name }}</span>
++        <span class="meta">{{ source.size_bytes }} bytes</span>
++        <form method="post" action="/library/delete" class="inline-form">
++          <input type="hidden" name="name" value="{{ source.name }}">
++          <button type="submit">Delete <span class="visually-hidden">{{ source.name }}</span></button>
++        </form>
++      </li>
++      {% endfor %}
++    </ul>
++    {% else %}
++    <p>No 1-minute clips yet.</p>
++    {% endif %}
+   </section>
+ 
+-  <h2>Sources (1-minute slices)</h2>
+-  {% if sources %}
+-  <ul class="source-list">
+-    {% for s in sources %}
+-    <li>
+-      <span>{{ s.name }}</span>
+-      <span class="meta">{{ s.size_bytes }} bytes</span>
+-      <form method="post" action="/library/delete" class="inline-form">
+-        <input type="hidden" name="name" value="{{ s.name }}">
+-        <button type="submit">Delete</button>
+-      </form>
+-    </li>
+-    {% endfor %}
+-  </ul>
+-  {% else %}
+-  <p>No source videos yet.</p>
+-  {% endif %}
++  <section id="panel-videos" role="tabpanel" aria-labelledby="tab-videos"
++           {% if tab != "videos" %}hidden{% endif %}>
++    <h2>Videos</h2>
++    <p class="lede">Upload complete videos without slicing them.</p>
++    <form class="upload-form" method="post" action="/library/videos/upload"
++          enctype="multipart/form-data">
++      <label for="video-file">Video file</label>
++      <input id="video-file" type="file" name="file"
++             accept=".mp4,.mov,.webm,.mkv,video/*" required>
++      <button type="submit">Upload video</button>
++    </form>
++
++    {% if videos %}
++    <ul class="source-list">
++      {% for video in videos %}
++      <li>
++        <span>{{ video.name }}</span>
++        <span class="meta">{{ video.size_bytes }} bytes</span>
++        <form method="post" action="/library/videos/delete" class="inline-form">
++          <input type="hidden" name="name" value="{{ video.name }}">
++          <button type="submit">Delete <span class="visually-hidden">{{ video.name }}</span></button>
++        </form>
++      </li>
++      {% endfor %}
++    </ul>
++    {% else %}
++    <p>No videos yet.</p>
++    {% endif %}
++  </section>
++
++  <section id="panel-images" role="tabpanel" aria-labelledby="tab-images"
++           {% if tab != "images" %}hidden{% endif %}>
++    <h2>Images</h2>
++    <p class="lede">Upload JPG, PNG, or WebP images.</p>
++    <form id="image-upload-form" class="upload-form" enctype="multipart/form-data">
++      <label for="image-file">Image file</label>
++      <input id="image-file" type="file" name="file"
++             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" required>
++      <button type="submit">Upload image</button>
++    </form>
++    <p id="image-status" role="status" aria-live="polite"></p>
++
++    {% if images %}
++    <ul class="source-list">
++      {% for image in images %}
++      <li>
++        <span>{{ image.name }}</span>
++        <span class="meta">{{ image.size_bytes }} bytes</span>
++        <button type="button" class="image-delete" data-name="{{ image.name }}">
++          Delete <span class="visually-hidden">{{ image.name }}</span>
++        </button>
++      </li>
++      {% endfor %}
++    </ul>
++    {% else %}
++    <p>No images yet.</p>
++    {% endif %}
++  </section>
+ {% endblock %}
+ {% block scripts %}
+   <script src="/static/library.js" defer></script>
+ {% endblock %}
+diff --git a/src/roblox_viral/web/youtube.py b/src/roblox_viral/web/youtube.py
+deleted file mode 100644
+index c436579..0000000
+--- a/src/roblox_viral/web/youtube.py
++++ /dev/null
+@@ -1,122 +0,0 @@
+-from __future__ import annotations
+-
+-import re
+-from pathlib import Path
+-from urllib.parse import urlparse
+-
+-import yt_dlp
+-
+-YOUTUBE_FORMAT = (
+-    "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/"
+-    "b[height<=1080][ext=mp4]/b[height<=1080]/b"
+-)
+-
+-# Prefer non-web clients; YouTube often 403s default web progressive URLs.
+-_YOUTUBE_EXTRACTOR_ARGS = {
+-    "youtube": {"player_client": ["android", "ios", "web"]}
+-}
+-_HTTP_HEADERS = {
+-    "User-Agent": (
+-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+-        "AppleWebKit/537.36 (KHTML, like Gecko) "
+-        "Chrome/131.0.0.0 Safari/537.36"
+-    ),
+-}
+-
+-_STEM_RE = re.compile(r"^[A-Za-z0-9._ -]+$")
+-_VIDEO_EXT = re.compile(r"\.(mp4|mov|webm|mkv)$", re.I)
+-
+-
+-def validate_youtube_url(url: str) -> str:
+-    cleaned = (url or "").strip()
+-    if not cleaned:
+-        raise ValueError("YouTube URL is required")
+-    parsed = urlparse(cleaned)
+-    host = (parsed.netloc or "").lower()
+-    if "youtube.com" not in host and "youtu.be" not in host:
+-        raise ValueError("URL must be a YouTube link")
+-    return cleaned
+-
+-
+-def validate_stem(name: str) -> str:
+-    cleaned = (name or "").strip()
+-    if not cleaned:
+-        raise ValueError("Name is required")
+-    if _VIDEO_EXT.search(cleaned):
+-        raise ValueError("Name must not include a file extension")
+-    if (
+-        not _STEM_RE.fullmatch(cleaned)
+-        or ".." in cleaned
+-        or "/" in cleaned
+-        or "\\" in cleaned
+-    ):
+-        raise ValueError("Invalid name (use letters, numbers, spaces, . _ -)")
+-    return cleaned
+-
+-
+-def download_youtube(
+-    url: str,
+-    dest: Path,
+-    *,
+-    cookies_path: Path | None = None,
+-) -> Path:
+-    """Download best ≤1080p MP4 to dest. Raises RuntimeError on failure."""
+-    safe_url = validate_youtube_url(url)
+-    dest = Path(dest)
+-    dest.parent.mkdir(parents=True, exist_ok=True)
+-    # Force an extension placeholder so yt-dlp does not write a bare stem path.
+-    outtmpl = str(dest.parent / f"{dest.stem}.%(ext)s")
+-    opts: dict = {
+-        "format": YOUTUBE_FORMAT,
+-        "outtmpl": outtmpl,
+-        "merge_output_format": "mp4",
+-        "quiet": True,
+-        "no_warnings": True,
+-        "noprogress": True,
+-        "extractor_args": _YOUTUBE_EXTRACTOR_ARGS,
+-        "http_headers": _HTTP_HEADERS,
+-    }
+-    if cookies_path is not None:
+-        cookie_file = Path(cookies_path)
+-        if not cookie_file.is_file():
+-            raise RuntimeError(f"YouTube cookies file not found: {cookie_file}")
+-        opts["cookiefile"] = str(cookie_file)
+-    try:
+-        with yt_dlp.YoutubeDL(opts) as ydl:
+-            ydl.download([safe_url])
+-    except Exception as exc:
+-        msg = str(exc)
+-        if "Sign in to confirm" in msg or "not a bot" in msg.lower():
+-            raise RuntimeError(
+-                "YouTube bot check blocked the download. Export browser cookies to "
+-                "media/youtube_cookies.txt (or set YOUTUBE_COOKIES to that file path), "
+-                "then retry. See README."
+-            ) from exc
+-        raise RuntimeError(f"YouTube download failed: {exc}") from exc
+-
+-    produced = _find_download_product(dest)
+-    if produced is None:
+-        raise RuntimeError("YouTube download produced no file")
+-    if produced != dest:
+-        produced.replace(dest)
+-    if not dest.is_file() or dest.stat().st_size == 0:
+-        raise RuntimeError("YouTube download produced no file")
+-    return dest
+-
+-
+-def _find_download_product(dest: Path) -> Path | None:
+-    """Locate the file yt-dlp wrote for this dest stem."""
+-    candidates: list[Path] = []
+-    for path in (
+-        dest,
+-        dest.with_suffix(".mp4"),
+-        dest.with_suffix(".mkv"),
+-        dest.with_suffix(".webm"),
+-        dest.parent / dest.stem,  # bare name without extension
+-    ):
+-        if path.is_file() and path.stat().st_size > 0:
+-            candidates.append(path)
+-    for path in sorted(dest.parent.glob(dest.stem + ".*")):
+-        if path.is_file() and path.stat().st_size > 0 and path not in candidates:
+-            candidates.append(path)
+-    return candidates[0] if candidates else None
+diff --git a/tests/test_render.py b/tests/test_render.py
+index 8baba50..6c4e825 100644
+--- a/tests/test_render.py
++++ b/tests/test_render.py
+@@ -205,10 +205,105 @@ def test_render_still_missing_image_raises(tmp_path, monkeypatch):
+     ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+     monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 1.0)
+     monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+     with pytest.raises(RenderError, match="Image"):
+         render_still(
+             image_path=tmp_path / "missing.jpg",
+             audio_path=audio,
+             ass_path=ass,
+             output_path=tmp_path / "out.mp4",
+         )
++
++
++def test_render_video_default_speed_omits_setpts(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video, audio_path=audio, ass_path=ass, output_path=out
++    )
++    vf = seen["cmd"][seen["cmd"].index("-vf") + 1]
++    assert "setpts" not in vf
++
++
++def test_render_video_speed_200_inserts_setpts(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        video_speed=200,
++    )
++    vf = seen["cmd"][seen["cmd"].index("-vf") + 1]
++    assert "setpts=100/200*PTS" in vf
++
++
++def test_render_video_overlay_includes_setpts_on_base(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    overlay = _touch(tmp_path / "overlay.mp4")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        overlay_path=overlay,
++        video_speed=150,
++    )
++    fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
++    assert "setpts=100/150*PTS" in fc
++    assert "lte(t,3.5)" in fc
+diff --git a/tests/test_voice.py b/tests/test_voice.py
+index 701bfe1..94f9557 100644
+--- a/tests/test_voice.py
++++ b/tests/test_voice.py
+@@ -1,18 +1,22 @@
+ import pytest
+ 
+ from roblox_viral.voice import (
+     DEFAULT_PITCH,
+     DEFAULT_SPEED,
++    DEFAULT_VIDEO_SPEED,
+     EdgeTTSProvider,
++    VIDEO_SPEED_MAX,
++    VIDEO_SPEED_MIN,
+     format_edge_pitch,
+     format_edge_rate,
++    validate_video_speed,
+ )
+ 
+ 
+ def test_format_edge_pitch_defaults_and_signs():
+     assert DEFAULT_PITCH == 15
+     assert format_edge_pitch(15) == "+15Hz"
+     assert format_edge_pitch(0) == "+0Hz"
+     assert format_edge_pitch(-10) == "-10Hz"
+ 
+ 
+@@ -60,10 +64,26 @@ def test_edge_tts_provider_passes_rate_and_pitch(tmp_path, monkeypatch):
+     out = tmp_path / "n.mp3"
+     EdgeTTSProvider(
+         voice="en-US-EmmaNeural",
+         rate="+30%",
+         pitch="+15Hz",
+     ).synthesize("Hello", out)
+     assert seen["rate"] == "+30%"
+     assert seen["pitch"] == "+15Hz"
+     assert seen["boundary"] == "WordBoundary"
+     assert out.is_file()
++
++
++def test_validate_video_speed_ok():
++    assert DEFAULT_VIDEO_SPEED == 100
++    assert validate_video_speed(100) == 100
++    assert validate_video_speed(50) == 50
++    assert validate_video_speed(200) == 200
++
++
++def test_validate_video_speed_rejects():
++    with pytest.raises(ValueError):
++        validate_video_speed(49)
++    with pytest.raises(ValueError):
++        validate_video_speed(201)
++    with pytest.raises(ValueError):
++        validate_video_speed(True)  # type: ignore[arg-type]
+diff --git a/tests/web/test_api.py b/tests/web/test_api.py
+index 14b4ffc..1d5c107 100644
+--- a/tests/web/test_api.py
++++ b/tests/web/test_api.py
+@@ -295,38 +295,48 @@ def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
+     assert 'selected' in r.text.lower() or "Emma" in r.text
+ 
+ 
+ def test_generate_page_has_picture_tab_controls(tmp_path, monkeypatch):
+     async def fake_voices():
+         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+ 
+     monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
++    _seed_source(c)
++
++    r_empty = c.get("/")
++    assert r_empty.status_code == 200
++    assert "No images — upload in Library" in r_empty.text
++    assert "upload below" not in r_empty.text.lower()
++
+     settings = c.app.state.settings
+     settings.images_dir.mkdir(parents=True, exist_ok=True)
+     (settings.images_dir / "still.jpg").write_bytes(b"img")
+     r = c.get("/")
+     assert r.status_code == 200
+     assert 'id="tab-roblox"' in r.text
+     assert 'id="tab-picture"' in r.text
+     assert 'id="image_name"' in r.text
+     assert "still.jpg" in r.text
+     assert 'id="ken_burns"' in r.text
+-    assert 'id="image-file"' in r.text
+-    assert 'id="image-delete-btn"' in r.text
++    assert 'id="image-file"' not in r.text
++    assert 'id="image-upload-btn"' not in r.text
++    assert 'id="image-delete-btn"' not in r.text
+     # Ken Burns lives in the picture block, not the roblox source block
+     roblox_idx = r.text.index('id="roblox-source-block"')
+     picture_idx = r.text.index('id="picture-source-block"')
+     ken_idx = r.text.index('id="ken_burns"')
+     assert picture_idx < ken_idx
+     assert "ken_burns" not in r.text[roblox_idx:picture_idx]
++    assert 'id="video_speed"' in r.text
++    assert "(video)" in r.text or "(1m)" in r.text
+ 
+ 
+ def test_image_upload_requires_auth(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     r = c.post(
+         "/api/images",
+         files={"file": ("photo.jpg", b"xx", "image/jpeg")},
+     )
+     assert r.status_code == 401
+ 
+@@ -473,10 +483,61 @@ def test_create_roblox_job_ignores_ken_burns(tmp_path, monkeypatch):
+             "source_name": "clip.mp4",
+             "story": "Hi.\n",
+             "voice": "en-US-EmmaNeural",
+             "ken_burns": True,
+         },
+     )
+     assert r.status_code == 200
+     data = c.get(f"/api/jobs/{r.json()['id']}").json()
+     assert data["mode"] == "roblox"
+     assert data["ken_burns"] is False
++
++
++def test_api_jobs_accepts_video_speed(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    _seed_source(c)
++
++    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
++        record = self.get(job_id)
++        assert record is not None
++        record.output_name = f"{job_id}.mp4"
++        out = settings.outputs_dir / record.output_name
++        out.parent.mkdir(parents=True, exist_ok=True)
++        out.write_bytes(b"fake-mp4")
++        record.status = "done"
++        with self._lock:
++            if self._active_id == job_id:
++                self._active_id = None
++
++    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
++
++    r = c.post(
++        "/api/jobs",
++        json={
++            "source_name": "clip.mp4",
++            "story": "Hi.\n",
++            "voice": "en-US-EmmaNeural",
++            "video_speed": 120,
++        },
++    )
++    assert r.status_code == 200
++    job_id = r.json()["id"]
++    data = c.get(f"/api/jobs/{job_id}").json()
++    assert data["video_speed"] == 120
++
++
++def test_api_jobs_rejects_video_speed(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    _seed_source(c)
++
++    r = c.post(
++        "/api/jobs",
++        json={
++            "source_name": "clip.mp4",
++            "story": "Hi.\n",
++            "voice": "en-US-EmmaNeural",
++            "video_speed": 10,
++        },
++    )
++    assert r.status_code == 400
+diff --git a/tests/web/test_api_v1.py b/tests/web/test_api_v1.py
+index 0f1d557..57555b1 100644
+--- a/tests/web/test_api_v1.py
++++ b/tests/web/test_api_v1.py
+@@ -81,20 +81,140 @@ def test_create_leni_maps_to_picture(tmp_path, monkeypatch):
+             "story": "Hi.\n",
+             "type": "leni",
+             "source_name": "still.jpg",
+         },
+     )
+     assert r.status_code == 200
+     st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+     assert st.json()["mode"] == "picture"
+ 
+ 
++def test_create_accepts_optional_pitch_and_speed(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
++    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "roblox",
++            "source_name": "clip.mp4",
++            "pitch": "-20",
++            "speed": "150",
++        },
++    )
++    assert r.status_code == 200
++    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
++    assert st.json()["pitch"] == -20
++    assert st.json()["speed"] == 150
++
++
++def test_create_defaults_pitch_and_speed(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
++    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "roblox",
++            "source_name": "clip.mp4",
++        },
++    )
++    assert r.status_code == 200
++    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
++    assert st.json()["pitch"] == 15
++    assert st.json()["speed"] == 130
++
++
++def test_create_accepts_video_speed(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
++    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "roblox",
++            "source_name": "clip.mp4",
++            "video_speed": "160",
++        },
++    )
++    assert r.status_code == 200
++    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
++    assert st.json()["video_speed"] == 160
++
++
++def test_create_resolves_raw_library_video(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    (settings.videos_dir / "raw.mp4").write_bytes(b"vid")
++    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "roblox",
++            "source_name": "raw.mp4",
++        },
++    )
++    assert r.status_code == 200
++
++
++def test_create_invalid_video_speed_400(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "roblox",
++            "source_name": "clip.mp4",
++            "video_speed": "9",
++        },
++    )
++    assert r.status_code == 400
++
++
++def test_create_invalid_pitch_400(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "roblox",
++            "source_name": "clip.mp4",
++            "pitch": "999",
++        },
++    )
++    assert r.status_code == 400
++
++
+ def test_create_bad_type_400(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+             "type": "other",
+             "source_name": "clip.mp4",
+diff --git a/tests/web/test_config.py b/tests/web/test_config.py
+index 3d007cd..fc4bef2 100644
+--- a/tests/web/test_config.py
++++ b/tests/web/test_config.py
+@@ -18,41 +18,20 @@ def test_ensure_media_dirs(tmp_path: Path, monkeypatch):
+ def test_gemini_settings_and_prompt_path(tmp_path: Path, monkeypatch):
+     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+     monkeypatch.setenv("APP_PASSWORD", "secret")
+     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+     settings = Settings.from_env()
+     assert settings.gemini_api_key == "test-gemini-key"
+     assert settings.prompt_path == settings.media_root / "prompt.txt"
+ 
+ 
+-def test_youtube_cookies_path_default_and_env(tmp_path: Path, monkeypatch):
+-    media = tmp_path / "media"
+-    media.mkdir()
+-    monkeypatch.setenv("MEDIA_ROOT", str(media))
+-    monkeypatch.setenv("APP_PASSWORD", "secret")
+-    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+-    monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+-    settings = Settings.from_env()
+-    assert settings.youtube_cookies_path is None
+-
+-    cookies = media / "youtube_cookies.txt"
+-    cookies.write_text("# Netscape\n", encoding="utf-8")
+-    assert settings.youtube_cookies_path == cookies
+-
+-    other = tmp_path / "other_cookies.txt"
+-    other.write_text("# Netscape\n", encoding="utf-8")
+-    monkeypatch.setenv("YOUTUBE_COOKIES", str(other))
+-    settings2 = Settings.from_env()
+-    assert settings2.youtube_cookies_path == other
+-
+-
+ def test_overlay_video_path_default_and_env(tmp_path: Path, monkeypatch):
+     media = tmp_path / "media"
+     media.mkdir()
+     monkeypatch.setenv("MEDIA_ROOT", str(media))
+     monkeypatch.setenv("APP_PASSWORD", "secret")
+     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+     monkeypatch.delenv("OVERLAY_VIDEO", raising=False)
+     settings = Settings.from_env()
+     # Packaged asset may exist in the checkout; media override is tested below.
+     packaged = settings.overlay_video_path
+diff --git a/tests/web/test_jobs.py b/tests/web/test_jobs.py
+index b3057e1..f5f92cd 100644
+--- a/tests/web/test_jobs.py
++++ b/tests/web/test_jobs.py
+@@ -354,10 +354,74 @@ def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
+         "One line only here.\n",
+         "en-US-EmmaNeural",
+         mode="roblox",
+         ephemeral=True,
+     )
+     input_path = s.jobs_dir / job.id / "input.mp4"
+     input_path.write_bytes(b"vid")
+     mgr.run_job(s, job.id)
+     assert mgr.get(job.id, s).status == "done"
+     assert seen["video_path"] == input_path.resolve()
++
++
++def test_create_job_persists_video_speed(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    (s.videos_dir / "raw-only.mp4").write_bytes(b"vid")
++    mgr = JobManager()
++    record = mgr.create(
++        s,
++        "raw-only.mp4",
++        "Hello world.\n",
++        "en-US-EmmaNeural",
++        video_speed=150,
++    )
++    assert record.video_speed == 150
++    loaded = mgr.get(record.id, s)
++    assert loaded is not None
++    assert loaded.video_speed == 150
++
++
++def test_create_job_rejects_bad_video_speed(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    with pytest.raises(ValueError):
++        mgr.create(
++            s,
++            "clip.mp4",
++            "Hello world.\n",
++            "en-US-EmmaNeural",
++            video_speed=999,
++        )
++
++
++def test_run_job_passes_video_speed_to_render(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    seen = {}
++
++    def fake_synthesize(self, text, output_path):
++        Path(output_path).write_bytes(b"mp3")
++        return [WordTiming("One", 0, 100)]
++
++    def fake_write_ass(words, ass_path, sentences=None):
++        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
++
++    def fake_render_video(**kwargs):
++        seen.update(kwargs)
++        Path(kwargs["output_path"]).write_bytes(b"mp4")
++
++    monkeypatch.setattr(
++        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
++    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
++
++    job = mgr.create(
++        s,
++        "clip.mp4",
++        "One line only here.\n",
++        "en-US-EmmaNeural",
++        video_speed=175,
++    )
++    mgr.run_job(s, job.id)
++    assert seen["video_speed"] == 175
++    assert mgr.get(job.id, s).status == "done"
+diff --git a/tests/web/test_library.py b/tests/web/test_library.py
+index 2aea08b..aa840bc 100644
+--- a/tests/web/test_library.py
++++ b/tests/web/test_library.py
+@@ -198,10 +198,91 @@ def test_save_image_rejects_oversize_and_unsafe(tmp_path, monkeypatch):
+     with pytest.raises(ValueError):
+         library.resolve_image(s, "clip.mp4")
+ 
+ 
+ def test_images_not_listed_as_video_sources(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     library.save_image(s, "still.png", b"png")
+     (s.sources_dir / "clip.mp4").write_bytes(b"vid")
+     assert [x.name for x in library.list_sources(s)] == ["clip.mp4"]
+     assert [x.name for x in library.list_images(s)] == ["still.png"]
++
++
++def test_save_video_stores_as_is_no_slice(tmp_path, monkeypatch):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++    )
++    s.ensure_media_dirs()
++    called = {"slice": False}
++
++    def boom(*a, **k):
++        called["slice"] = True
++        raise AssertionError("slice must not run")
++
++    monkeypatch.setattr(lib, "slice_into_minute_parts", boom)
++    item = lib.save_video(s, "full.mp4", b"rawbytes")
++    assert item.name == "full.mp4"
++    assert (s.videos_dir / "full.mp4").read_bytes() == b"rawbytes"
++    assert called["slice"] is False
++    assert lib.list_videos(s)[0].name == "full.mp4"
++
++
++def test_resolve_roblox_media_sources_win(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++    )
++    s.ensure_media_dirs()
++    (s.sources_dir / "same.mp4").write_bytes(b"slice")
++    (s.videos_dir / "same.mp4").write_bytes(b"raw")
++    path = lib.resolve_roblox_media(s, "same.mp4")
++    assert path == (s.sources_dir / "same.mp4").resolve()
++
++
++def test_resolve_roblox_media_falls_back_to_videos(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++    )
++    s.ensure_media_dirs()
++    (s.videos_dir / "only.mp4").write_bytes(b"raw")
++    path = lib.resolve_roblox_media(s, "only.mp4")
++    assert path == (s.videos_dir / "only.mp4").resolve()
++
++
++def test_list_roblox_sources_labels_kinds(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++    )
++    s.ensure_media_dirs()
++    (s.sources_dir / "a-1.mp4").write_bytes(b"1")
++    (s.videos_dir / "b.mp4").write_bytes(b"2")
++    items = lib.list_roblox_sources(s)
++    kinds = {i.name: i.kind for i in items}
++    assert kinds["a-1.mp4"] == "slice"
++    assert kinds["b.mp4"] == "video"
+diff --git a/tests/web/test_library_routes.py b/tests/web/test_library_routes.py
+new file mode 100644
+index 0000000..b84e71b
+--- /dev/null
++++ b/tests/web/test_library_routes.py
+@@ -0,0 +1,77 @@
++from fastapi.testclient import TestClient
++
++from roblox_viral.web.app import create_app
++from roblox_viral.web.config import Settings
++
++
++def _client(tmp_path, monkeypatch):
++    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
++    monkeypatch.setenv("APP_PASSWORD", "s3cret")
++    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
++    return TestClient(create_app(Settings.from_env()))
++
++
++def _login(client: TestClient) -> None:
++    response = client.post(
++        "/login",
++        data={"password": "s3cret"},
++        follow_redirects=False,
++    )
++    assert response.status_code in (302, 303)
++
++
++def test_library_raw_video_upload_keeps_videos_tab(tmp_path, monkeypatch):
++    client = _client(tmp_path, monkeypatch)
++    _login(client)
++
++    response = client.post(
++        "/library/videos/upload",
++        files={"file": ("clip.mp4", b"data", "video/mp4")},
++    )
++
++    assert response.status_code == 200
++    assert (client.app.state.settings.videos_dir / "clip.mp4").is_file()
++    assert 'id="tab-videos"' in response.text
++    assert 'aria-selected="true"' in response.text[
++        response.text.index('id="tab-videos"') :
++    ][:200]
++
++
++def test_library_raw_video_delete_keeps_videos_tab(tmp_path, monkeypatch):
++    client = _client(tmp_path, monkeypatch)
++    _login(client)
++    video = client.app.state.settings.videos_dir / "clip.mp4"
++    video.write_bytes(b"data")
++
++    response = client.post(
++        "/library/videos/delete",
++        data={"name": "clip.mp4"},
++    )
++
++    assert response.status_code == 200
++    assert not video.exists()
++    assert 'id="tab-videos"' in response.text
++    assert 'aria-selected="true"' in response.text[
++        response.text.index('id="tab-videos"') :
++    ][:200]
++
++
++def test_library_page_has_three_tabs_and_media_lists(tmp_path, monkeypatch):
++    client = _client(tmp_path, monkeypatch)
++    _login(client)
++    settings = client.app.state.settings
++    (settings.sources_dir / "slice-1.mp4").write_bytes(b"slice")
++    (settings.videos_dir / "video.mp4").write_bytes(b"video")
++    (settings.images_dir / "image.jpg").write_bytes(b"image")
++
++    response = client.get("/library")
++
++    assert response.status_code == 200
++    assert "YouTube" not in response.text
++    assert "1-minute clips" in response.text
++    assert "Videos" in response.text
++    assert "Images" in response.text
++    assert "slice-1.mp4" in response.text
++    assert "video.mp4" in response.text
++    assert "image.jpg" in response.text
++    assert 'src="/static/library.js"' in response.text
+diff --git a/tests/web/test_youtube.py b/tests/web/test_youtube.py
+deleted file mode 100644
+index 2a8081f..0000000
+--- a/tests/web/test_youtube.py
++++ /dev/null
+@@ -1,126 +0,0 @@
+-from pathlib import Path
+-
+-import pytest
+-
+-from roblox_viral.web.youtube import (
+-    download_youtube,
+-    validate_stem,
+-    validate_youtube_url,
+-)
+-
+-
+-def test_validate_youtube_url_accepts_watch_and_short():
+-    assert "youtube.com" in validate_youtube_url(
+-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+-    )
+-    assert "youtu.be" in validate_youtube_url("https://youtu.be/dQw4w9WgXcQ")
+-
+-
+-def test_validate_youtube_url_rejects_non_youtube():
+-    with pytest.raises(ValueError, match="YouTube"):
+-        validate_youtube_url("https://example.com/watch?v=abc")
+-
+-
+-def test_validate_stem_ok():
+-    assert validate_stem("  gameplay clip ") == "gameplay clip"
+-
+-
+-def test_validate_stem_rejects_extension_and_empty():
+-    with pytest.raises(ValueError):
+-        validate_stem("clip.mp4")
+-    with pytest.raises(ValueError):
+-        validate_stem("   ")
+-    with pytest.raises(ValueError):
+-        validate_stem("../evil")
+-
+-
+-def test_download_youtube_writes_dest(tmp_path, monkeypatch):
+-    dest = tmp_path / "download.mp4"
+-
+-    class FakeYDL:
+-        def __init__(self, opts):
+-            self.opts = opts
+-
+-        def __enter__(self):
+-            return self
+-
+-        def __exit__(self, *args):
+-            return False
+-
+-        def download(self, urls):
+-            dest.write_bytes(b"fake-mp4")
+-
+-    monkeypatch.setattr(
+-        "roblox_viral.web.youtube.yt_dlp.YoutubeDL",
+-        FakeYDL,
+-    )
+-    out = download_youtube("https://www.youtube.com/watch?v=dQw4w9WgXcQ", dest)
+-    assert out == dest
+-    assert dest.read_bytes() == b"fake-mp4"
+-
+-
+-def test_find_download_product_accepts_extensionless_file(tmp_path):
+-    from roblox_viral.web.youtube import _find_download_product
+-
+-    dest = tmp_path / "download.mp4"
+-    bare = tmp_path / "download"
+-    bare.write_bytes(b"video-bytes")
+-    found = _find_download_product(dest)
+-    assert found == bare
+-
+-
+-def test_download_youtube_passes_cookiefile(tmp_path, monkeypatch):
+-    dest = tmp_path / "download.mp4"
+-    cookies = tmp_path / "cookies.txt"
+-    cookies.write_text("# Netscape\n", encoding="utf-8")
+-    seen = {}
+-
+-    class FakeYDL:
+-        def __init__(self, opts):
+-            seen.update(opts)
+-
+-        def __enter__(self):
+-            return self
+-
+-        def __exit__(self, *args):
+-            return False
+-
+-        def download(self, urls):
+-            dest.write_bytes(b"fake-mp4")
+-
+-    monkeypatch.setattr(
+-        "roblox_viral.web.youtube.yt_dlp.YoutubeDL",
+-        FakeYDL,
+-    )
+-    download_youtube(
+-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+-        dest,
+-        cookies_path=cookies,
+-    )
+-    assert seen.get("cookiefile") == str(cookies)
+-
+-
+-def test_download_youtube_bot_check_message(tmp_path, monkeypatch):
+-    dest = tmp_path / "download.mp4"
+-
+-    class FakeYDL:
+-        def __init__(self, opts):
+-            pass
+-
+-        def __enter__(self):
+-            return self
+-
+-        def __exit__(self, *args):
+-            return False
+-
+-        def download(self, urls):
+-            raise Exception(
+-                "ERROR: [youtube] abc: Sign in to confirm you’re not a bot."
+-            )
+-
+-    monkeypatch.setattr(
+-        "roblox_viral.web.youtube.yt_dlp.YoutubeDL",
+-        FakeYDL,
+-    )
+-    with pytest.raises(RuntimeError, match="cookies"):
+-        download_youtube("https://www.youtube.com/watch?v=dQw4w9WgXcQ", dest)
+diff --git a/tests/web/test_youtube_api.py b/tests/web/test_youtube_api.py
+deleted file mode 100644
+index 9847bd6..0000000
+--- a/tests/web/test_youtube_api.py
++++ /dev/null
+@@ -1,74 +0,0 @@
+-from pathlib import Path
+-
+-from fastapi.testclient import TestClient
+-
+-from roblox_viral.web.app import create_app
+-from roblox_viral.web.config import Settings
+-from roblox_viral.web.library import SourceVideo
+-
+-
+-def _client(tmp_path, monkeypatch):
+-    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+-    monkeypatch.setenv("APP_PASSWORD", "s3cret")
+-    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+-    return TestClient(create_app(Settings.from_env()))
+-
+-
+-def _login(c: TestClient) -> None:
+-    r = c.post("/login", data={"password": "s3cret"}, follow_redirects=False)
+-    assert r.status_code in (302, 303)
+-
+-
+-def test_youtube_import_requires_auth(tmp_path, monkeypatch):
+-    c = _client(tmp_path, monkeypatch)
+-    assert (
+-        c.post(
+-            "/api/library/youtube",
+-            json={"url": "https://youtu.be/dQw4w9WgXcQ", "name": "clip"},
+-        ).status_code
+-        == 401
+-    )
+-
+-
+-def test_youtube_import_rejects_bad_name(tmp_path, monkeypatch):
+-    c = _client(tmp_path, monkeypatch)
+-    _login(c)
+-    r = c.post(
+-        "/api/library/youtube",
+-        json={"url": "https://youtu.be/dQw4w9WgXcQ", "name": "bad.mp4"},
+-    )
+-    assert r.status_code == 400
+-
+-
+-def test_youtube_import_success(tmp_path, monkeypatch):
+-    def fake_download(url: str, dest: Path, **kwargs) -> Path:
+-        dest.write_bytes(b"vid")
+-        return dest
+-
+-    def fake_slice(settings, uploaded_path, base_stem):
+-        name = f"{base_stem}-1.mp4"
+-        path = settings.sources_dir / name
+-        path.write_bytes(b"slice")
+-        return [SourceVideo(name, path, 5)]
+-
+-    monkeypatch.setattr("roblox_viral.web.jobs.download_youtube", fake_download)
+-    monkeypatch.setattr(
+-        "roblox_viral.web.jobs.slice_into_minute_parts", fake_slice
+-    )
+-
+-    c = _client(tmp_path, monkeypatch)
+-    _login(c)
+-    r = c.post(
+-        "/api/library/youtube",
+-        json={
+-            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+-            "name": "gameplay",
+-        },
+-    )
+-    assert r.status_code == 200
+-    job_id = r.json()["id"]
+-    status = c.get(f"/api/jobs/{job_id}")
+-    assert status.status_code == 200
+-    body = status.json()
+-    assert body["status"] == "done"
+-    assert body["created_slices"] == ["gameplay-1.mp4"]
+diff --git a/tests/web/test_youtube_jobs.py b/tests/web/test_youtube_jobs.py
+deleted file mode 100644
+index 62f97f8..0000000
+--- a/tests/web/test_youtube_jobs.py
++++ /dev/null
+@@ -1,58 +0,0 @@
+-from pathlib import Path
+-
+-import pytest
+-
+-from roblox_viral.web.config import Settings
+-from roblox_viral.web.jobs import BusyError, JobManager
+-from roblox_viral.web.library import SourceVideo
+-
+-
+-def _settings(tmp_path, monkeypatch) -> Settings:
+-    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+-    monkeypatch.setenv("APP_PASSWORD", "x")
+-    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+-    s = Settings.from_env()
+-    s.ensure_media_dirs()
+-    return s
+-
+-
+-def test_youtube_job_busy_blocks_render(tmp_path, monkeypatch):
+-    s = _settings(tmp_path, monkeypatch)
+-    mgr = JobManager()
+-    mgr._active_id = "busy"
+-    (s.sources_dir / "clip.mp4").write_bytes(b"x")
+-    with pytest.raises(BusyError, match="already in progress"):
+-        mgr.create(s, "clip.mp4", "Hi.\n", "en-US-EmmaNeural")
+-
+-
+-def test_run_youtube_job_success(tmp_path, monkeypatch):
+-    s = _settings(tmp_path, monkeypatch)
+-    mgr = JobManager()
+-
+-    def fake_download(url: str, dest: Path, **kwargs) -> Path:
+-        dest.write_bytes(b"video")
+-        return dest
+-
+-    def fake_slice(settings, uploaded_path, base_stem):
+-        name = f"{base_stem}-1.mp4"
+-        path = settings.sources_dir / name
+-        path.write_bytes(b"slice")
+-        return [SourceVideo(name, path, path.stat().st_size)]
+-
+-    monkeypatch.setattr("roblox_viral.web.jobs.download_youtube", fake_download)
+-    monkeypatch.setattr(
+-        "roblox_viral.web.jobs.slice_into_minute_parts", fake_slice
+-    )
+-
+-    record = mgr.create_youtube(
+-        s, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "gameplay"
+-    )
+-    assert record.kind == "youtube"
+-    assert record.status == "queued"
+-    mgr.run_youtube_job(s, record.id)
+-    done = mgr.get(record.id, s)
+-    assert done is not None
+-    assert done.status == "done"
+-    assert done.created_slices == ["gameplay-1.mp4"]
+-    assert (s.sources_dir / "gameplay-1.mp4").is_file()
+-    assert mgr._active_id is None
+diff --git a/tests/web/test_youtube_removed.py b/tests/web/test_youtube_removed.py
+new file mode 100644
+index 0000000..a23076b
+--- /dev/null
++++ b/tests/web/test_youtube_removed.py
+@@ -0,0 +1,24 @@
++from fastapi.testclient import TestClient
++
++from roblox_viral.web.app import create_app
++from roblox_viral.web.config import Settings
++
++
++def test_youtube_endpoint_gone(tmp_path, monkeypatch):
++    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
++    monkeypatch.setenv("APP_PASSWORD", "s3cret")
++    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
++    client = TestClient(create_app(Settings.from_env()))
++    login = client.post(
++        "/login",
++        data={"password": "s3cret"},
++        follow_redirects=False,
++    )
++    assert login.status_code in (302, 303)
++
++    response = client.post(
++        "/api/library/youtube",
++        json={"url": "https://youtu.be/x", "name": "a"},
++    )
++
++    assert response.status_code == 404

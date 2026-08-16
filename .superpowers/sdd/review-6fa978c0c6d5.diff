@@ -1,0 +1,346 @@
+=== COMMITS ===
+3820b08 feat: apply optional setpts for gameplay video_speed
+
+=== STAT ===
+ src/roblox_viral/render.py | 34 +++++++++++++----
+ src/roblox_viral/voice.py  | 13 +++++++
+ tests/test_render.py       | 95 ++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_voice.py        | 20 ++++++++++
+ 4 files changed, 155 insertions(+), 7 deletions(-)
+
+=== DIFF ===
+diff --git a/src/roblox_viral/render.py b/src/roblox_viral/render.py
+index 4931357..4b02e5e 100644
+--- a/src/roblox_viral/render.py
++++ b/src/roblox_viral/render.py
+@@ -1,19 +1,21 @@
+ """ffmpeg-based video render: loop, crop to 9:16, burn captions, mux TTS."""
+ 
+ from __future__ import annotations
+ 
+ import json
+ import shutil
+ import subprocess
+ from pathlib import Path
+ 
++from roblox_viral.voice import validate_video_speed
++
+ 
+ OUTPUT_WIDTH = 1080
+ OUTPUT_HEIGHT = 1920
+ OVERLAY_DURATION_S = 3.5
+ OVERLAY_HEIGHT = OUTPUT_HEIGHT // 2
+ OVERLAY_CHROMA_COLOR = "0x00FE00"
+ OVERLAY_CHROMA_SIMILARITY = "0.30"
+ OVERLAY_CHROMA_BLEND = "0.10"
+ 
+ KEN_BURNS_ZOOM = 1.20
+@@ -68,29 +70,37 @@ def probe_duration_seconds(media_path: Path | str) -> float:
+     return duration
+ 
+ 
+ def _ass_filter_path(ass_path: Path) -> str:
+     """Escape path for ffmpeg ass filter (Windows-safe)."""
+     p = ass_path.resolve().as_posix()
+     p = p.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+     return p
+ 
+ 
++def _playback_setpts(video_speed: int) -> str | None:
++    validate_video_speed(video_speed)
++    if video_speed == 100:
++        return None
++    return f"setpts=100/{video_speed}*PTS"
++
++
+ def render_video(
+     *,
+     video_path: Path | str,
+     audio_path: Path | str,
+     ass_path: Path | str,
+     output_path: Path | str,
+     keep_temp: bool = False,
+     work_dir: Path | str | None = None,
+     overlay_path: Path | str | None = None,
++    video_speed: int = 100,
+ ) -> Path:
+     """
+     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
+ 
+     When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
+     composite it centered (half frame height) over captions at the start.
+ 
+     Original video audio is discarded by mapping only the TTS audio stream.
+     Intermediate files live under work_dir when provided; otherwise only final out is kept
+     unless keep_temp is True (work_dir is then left for the caller).
+@@ -114,27 +124,31 @@ def render_video(
+         overlay = Path(overlay_path)
+         if not overlay.is_file():
+             raise RenderError(f"Overlay video not found: {overlay}")
+ 
+     out.parent.mkdir(parents=True, exist_ok=True)
+     if work_dir is not None:
+         Path(work_dir).mkdir(parents=True, exist_ok=True)
+ 
+     audio_duration = probe_duration_seconds(audio)
+     ass_escaped = _ass_filter_path(ass)
++    setpts = _playback_setpts(video_speed)
+ 
+     if overlay is None:
+-        vf = (
+-            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+-            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},"
+-            f"ass='{ass_escaped}'"
+-        )
++        parts = [
++            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
++            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
++        ]
++        if setpts:
++            parts.append(setpts)
++        parts.append(f"ass='{ass_escaped}'")
++        vf = ",".join(parts)
+         cmd = [
+             ffmpeg,
+             "-y",
+             "-stream_loop",
+             "-1",
+             "-i",
+             str(video),
+             "-i",
+             str(audio),
+             "-t",
+@@ -154,23 +168,29 @@ def render_video(
+             "-c:a",
+             "aac",
+             "-b:a",
+             "192k",
+             "-shortest",
+             "-movflags",
+             "+faststart",
+             str(out),
+         ]
+     else:
++        base_parts = [
++            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
++            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
++        ]
++        if setpts:
++            base_parts.append(setpts)
++        base = ",".join(base_parts)
+         fc = (
+-            f"[0:v]scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+-            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}[base];"
++            f"[0:v]{base}[base];"
+             f"[base]ass='{ass_escaped}'[cap];"
+             f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
+             f"format=yuva420p,scale=-2:{OVERLAY_HEIGHT}[ov];"
+             f"[cap][ov]overlay=(W-w)/2:(H-h)/2:enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[outv]"
+         )
+         cmd = [
+             ffmpeg,
+             "-y",
+             "-stream_loop",
+             "-1",
+diff --git a/src/roblox_viral/voice.py b/src/roblox_viral/voice.py
+index 822e806..d8975ad 100644
+--- a/src/roblox_viral/voice.py
++++ b/src/roblox_viral/voice.py
+@@ -21,20 +21,33 @@ class VoiceProvider(Protocol):
+     def synthesize(self, text: str, output_path: Path | str) -> list[WordTiming]:
+         """Synthesize speech to output_path; return word timings."""
+         ...
+ 
+ 
+ DEFAULT_PITCH = 15
+ DEFAULT_SPEED = 130
+ PITCH_MIN, PITCH_MAX = -100, 100
+ SPEED_MIN, SPEED_MAX = 50, 200
+ 
++DEFAULT_VIDEO_SPEED = 100
++VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = 50, 200
++
++
++def validate_video_speed(percent: int) -> int:
++    if not isinstance(percent, int) or isinstance(percent, bool):
++        raise ValueError("video_speed must be an int")
++    if percent < VIDEO_SPEED_MIN or percent > VIDEO_SPEED_MAX:
++        raise ValueError(
++            f"video_speed must be between {VIDEO_SPEED_MIN} and {VIDEO_SPEED_MAX}"
++        )
++    return percent
++
+ 
+ def format_edge_pitch(pitch: int) -> str:
+     if not isinstance(pitch, int) or isinstance(pitch, bool):
+         raise ValueError("pitch must be an int")
+     if pitch < PITCH_MIN or pitch > PITCH_MAX:
+         raise ValueError(f"pitch must be between {PITCH_MIN} and {PITCH_MAX}")
+     if pitch >= 0:
+         return f"+{pitch}Hz"
+     return f"{pitch}Hz"
+ 
+diff --git a/tests/test_render.py b/tests/test_render.py
+index 8baba50..6c4e825 100644
+--- a/tests/test_render.py
++++ b/tests/test_render.py
+@@ -205,10 +205,105 @@ def test_render_still_missing_image_raises(tmp_path, monkeypatch):
+     ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+     monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 1.0)
+     monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+     with pytest.raises(RenderError, match="Image"):
+         render_still(
+             image_path=tmp_path / "missing.jpg",
+             audio_path=audio,
+             ass_path=ass,
+             output_path=tmp_path / "out.mp4",
+         )
++
++
++def test_render_video_default_speed_omits_setpts(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video, audio_path=audio, ass_path=ass, output_path=out
++    )
++    vf = seen["cmd"][seen["cmd"].index("-vf") + 1]
++    assert "setpts" not in vf
++
++
++def test_render_video_speed_200_inserts_setpts(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        video_speed=200,
++    )
++    vf = seen["cmd"][seen["cmd"].index("-vf") + 1]
++    assert "setpts=100/200*PTS" in vf
++
++
++def test_render_video_overlay_includes_setpts_on_base(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    overlay = _touch(tmp_path / "overlay.mp4")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        overlay_path=overlay,
++        video_speed=150,
++    )
++    fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
++    assert "setpts=100/150*PTS" in fc
++    assert "lte(t,3.5)" in fc
+diff --git a/tests/test_voice.py b/tests/test_voice.py
+index 701bfe1..94f9557 100644
+--- a/tests/test_voice.py
++++ b/tests/test_voice.py
+@@ -1,18 +1,22 @@
+ import pytest
+ 
+ from roblox_viral.voice import (
+     DEFAULT_PITCH,
+     DEFAULT_SPEED,
++    DEFAULT_VIDEO_SPEED,
+     EdgeTTSProvider,
++    VIDEO_SPEED_MAX,
++    VIDEO_SPEED_MIN,
+     format_edge_pitch,
+     format_edge_rate,
++    validate_video_speed,
+ )
+ 
+ 
+ def test_format_edge_pitch_defaults_and_signs():
+     assert DEFAULT_PITCH == 15
+     assert format_edge_pitch(15) == "+15Hz"
+     assert format_edge_pitch(0) == "+0Hz"
+     assert format_edge_pitch(-10) == "-10Hz"
+ 
+ 
+@@ -60,10 +64,26 @@ def test_edge_tts_provider_passes_rate_and_pitch(tmp_path, monkeypatch):
+     out = tmp_path / "n.mp3"
+     EdgeTTSProvider(
+         voice="en-US-EmmaNeural",
+         rate="+30%",
+         pitch="+15Hz",
+     ).synthesize("Hello", out)
+     assert seen["rate"] == "+30%"
+     assert seen["pitch"] == "+15Hz"
+     assert seen["boundary"] == "WordBoundary"
+     assert out.is_file()
++
++
++def test_validate_video_speed_ok():
++    assert DEFAULT_VIDEO_SPEED == 100
++    assert validate_video_speed(100) == 100
++    assert validate_video_speed(50) == 50
++    assert validate_video_speed(200) == 200
++
++
++def test_validate_video_speed_rejects():
++    with pytest.raises(ValueError):
++        validate_video_speed(49)
++    with pytest.raises(ValueError):
++        validate_video_speed(201)
++    with pytest.raises(ValueError):
++        validate_video_speed(True)  # type: ignore[arg-type]

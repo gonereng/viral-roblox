@@ -1,0 +1,342 @@
+=== COMMITS ===
+3078897 feat(web): Generate video_speed slider and labeled roblox sources
+
+=== STAT ===
+ src/roblox_viral/web/app.py                  |   3 +-
+ src/roblox_viral/web/static/app.js           | 103 +++------------------------
+ src/roblox_viral/web/templates/generate.html |  18 ++---
+ 3 files changed, 18 insertions(+), 106 deletions(-)
+
+=== DIFF ===
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index d8daec2..a747b54 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -34,20 +34,21 @@ from roblox_viral.web.api_v1 import router as api_v1_router
+ from roblox_viral.web.auth import require_login, set_authenticated
+ from roblox_viral.web.config import Settings, get_settings
+ from roblox_viral.web.gemini import generate_story
+ from roblox_viral.web.jobs import BusyError, JobManager
+ from roblox_viral.web import library as library_mod
+ from roblox_viral.web.library import (
+     delete_image,
+     delete_source,
+     list_images,
+     list_outputs,
++    list_roblox_sources,
+     list_sources,
+     save_image,
+     save_upload,
+ )
+ from roblox_viral.web.prompt import load_prompt, save_prompt
+ from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
+ 
+ WEB_DIR = Path(__file__).resolve().parent
+ TEMPLATES_DIR = WEB_DIR / "templates"
+ STATIC_DIR = WEB_DIR / "static"
+@@ -142,21 +143,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+     def logout(request: Request) -> RedirectResponse:
+         set_authenticated(request, False)
+         return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
+ 
+     @app.get("/", response_class=HTMLResponse)
+     async def generate_page(
+         request: Request,
+         _: None = Depends(require_login),
+     ) -> HTMLResponse:
+         settings = request.app.state.settings
+-        sources = list_sources(settings)
++        sources = list_roblox_sources(settings)
+         try:
+             voices = await list_english_voices()
+         except Exception:
+             voices = [VoiceInfo(DEFAULT_VOICE, "en-US", "Female")]
+         return templates.TemplateResponse(
+             request,
+             "generate.html",
+             {
+                 "sources": sources,
+                 "voices": voices,
+diff --git a/src/roblox_viral/web/static/app.js b/src/roblox_viral/web/static/app.js
+index daf8040..5c77256 100644
+--- a/src/roblox_viral/web/static/app.js
++++ b/src/roblox_viral/web/static/app.js
+@@ -34,166 +34,80 @@
+         storyBtn.disabled = false;
+       }
+     });
+   }
+ 
+   const form = document.getElementById("generate-form");
+   if (!form) return;
+ 
+   const pitchInput = document.getElementById("pitch");
+   const speedInput = document.getElementById("speed");
++  const videoSpeedInput = document.getElementById("video_speed");
+   const pitchValue = document.getElementById("pitch-value");
+   const speedValue = document.getElementById("speed-value");
++  const videoSpeedValue = document.getElementById("video-speed-value");
++  const videoSpeedField = document.getElementById("video-speed-field");
+ 
+   function formatPitchLabel(n) {
+     const v = Number(n);
+     return (v > 0 ? "+" : "") + v + "%";
+   }
+   function formatSpeedLabel(n) {
+     return Number(n) + "%";
+   }
+   function syncVoiceSliders() {
+     if (pitchValue) pitchValue.textContent = formatPitchLabel(pitchInput.value);
+     if (speedValue) speedValue.textContent = formatSpeedLabel(speedInput.value);
++    if (videoSpeedValue && videoSpeedInput) {
++      videoSpeedValue.textContent = formatSpeedLabel(videoSpeedInput.value);
++    }
+   }
+   if (pitchInput && speedInput) {
+     pitchInput.addEventListener("input", syncVoiceSliders);
+     speedInput.addEventListener("input", syncVoiceSliders);
++    if (videoSpeedInput) videoSpeedInput.addEventListener("input", syncVoiceSliders);
+     syncVoiceSliders();
+   }
+ 
+   const generateBtn = document.getElementById("generate-btn");
+   const tabRoblox = document.getElementById("tab-roblox");
+   const tabPicture = document.getElementById("tab-picture");
+   const robloxBlock = document.getElementById("roblox-source-block");
+   const pictureBlock = document.getElementById("picture-source-block");
+   const sourceSelect = document.getElementById("source_name");
+   const imageSelect = document.getElementById("image_name");
+-  const imageFile = document.getElementById("image-file");
+-  const imageUploadBtn = document.getElementById("image-upload-btn");
+-  const imageDeleteBtn = document.getElementById("image-delete-btn");
+-  const imageErr = document.getElementById("image-error");
+   const kenBurnsEl = document.getElementById("ken_burns");
+   let currentMode = "roblox";
+-
+-  function showImageError(message) {
+-    if (!imageErr) return;
+-    imageErr.hidden = false;
+-    imageErr.textContent = message;
+-  }
+-  function clearImageError() {
+-    if (!imageErr) return;
+-    imageErr.hidden = true;
+-    imageErr.textContent = "";
+-  }
+   function imageSelectHasValue() {
+     return Boolean(imageSelect && imageSelect.value);
+   }
+   function syncGenerateEnabled() {
+     if (!generateBtn) return;
+     if (currentMode === "picture") {
+       generateBtn.disabled = !imageSelectHasValue();
+     } else {
+       generateBtn.disabled = !(sourceSelect && sourceSelect.value);
+     }
+   }
+   function setMode(mode) {
+     currentMode = mode;
+     const isPicture = mode === "picture";
+     if (robloxBlock) robloxBlock.hidden = isPicture;
+     if (pictureBlock) pictureBlock.hidden = !isPicture;
++    if (videoSpeedField) videoSpeedField.hidden = isPicture;
+     if (tabRoblox) tabRoblox.setAttribute("aria-selected", isPicture ? "false" : "true");
+     if (tabPicture) tabPicture.setAttribute("aria-selected", isPicture ? "true" : "false");
+     syncGenerateEnabled();
+   }
+   if (tabRoblox) tabRoblox.addEventListener("click", () => setMode("roblox"));
+   if (tabPicture) tabPicture.addEventListener("click", () => setMode("picture"));
+ 
+-  if (imageUploadBtn && imageFile && imageSelect) {
+-    imageUploadBtn.addEventListener("click", async () => {
+-      clearImageError();
+-      const file = imageFile.files && imageFile.files[0];
+-      if (!file) {
+-        showImageError("Choose an image file first");
+-        return;
+-      }
+-      const data = new FormData();
+-      data.append("file", file, file.name);
+-      imageUploadBtn.disabled = true;
+-      try {
+-        const res = await fetch("/api/images", {
+-          method: "POST",
+-          headers: { Accept: "application/json" },
+-          body: data,
+-        });
+-        const body = await res.json().catch(() => ({}));
+-        if (!res.ok) {
+-          showImageError(body.detail || `Upload failed (${res.status})`);
+-          return;
+-        }
+-        const empty = imageSelect.querySelector("option[disabled]");
+-        if (empty) empty.remove();
+-        const opt = document.createElement("option");
+-        opt.value = body.name;
+-        opt.textContent = body.name;
+-        imageSelect.append(opt);
+-        imageSelect.value = body.name;
+-        if (imageDeleteBtn) imageDeleteBtn.disabled = false;
+-        imageFile.value = "";
+-        syncGenerateEnabled();
+-      } catch (err) {
+-        showImageError(err.message || String(err));
+-      } finally {
+-        imageUploadBtn.disabled = false;
+-      }
+-    });
+-  }
+-
+-  if (imageDeleteBtn && imageSelect) {
+-    imageDeleteBtn.addEventListener("click", async () => {
+-      clearImageError();
+-      const name = imageSelect.value;
+-      if (!name) return;
+-      imageDeleteBtn.disabled = true;
+-      try {
+-        const res = await fetch("/api/images/" + encodeURIComponent(name), {
+-          method: "DELETE",
+-          headers: { Accept: "application/json" },
+-        });
+-        const body = await res.json().catch(() => ({}));
+-        if (!res.ok) {
+-          showImageError(body.detail || `Delete failed (${res.status})`);
+-          imageDeleteBtn.disabled = false;
+-          return;
+-        }
+-        const opt = imageSelect.querySelector('option[value="' + CSS.escape(name) + '"]');
+-        if (opt) opt.remove();
+-        if (!imageSelect.options.length) {
+-          const placeholder = document.createElement("option");
+-          placeholder.value = "";
+-          placeholder.disabled = true;
+-          placeholder.selected = true;
+-          placeholder.textContent = "No images — upload below";
+-          imageSelect.append(placeholder);
+-          imageDeleteBtn.disabled = true;
+-        } else {
+-          imageSelect.selectedIndex = 0;
+-          imageDeleteBtn.disabled = false;
+-        }
+-        syncGenerateEnabled();
+-      } catch (err) {
+-        showImageError(err.message || String(err));
+-        imageDeleteBtn.disabled = false;
+-      }
+-    });
+-  }
+-
+   const statusEl = document.getElementById("status");
+   const errorEl = document.getElementById("error");
+   const resultEl = document.getElementById("result");
+   const player = document.getElementById("player");
+   const download = document.getElementById("download");
+ 
+   let pollTimer = null;
+ 
+   function setStatus(text) {
+     statusEl.textContent = text;
+@@ -289,20 +203,21 @@
+     const payload = {
+       mode: currentMode,
+       source_name:
+         currentMode === "picture"
+           ? document.getElementById("image_name").value
+           : document.getElementById("source_name").value,
+       story: document.getElementById("story").value,
+       voice: document.getElementById("voice").value,
+       pitch: Number(document.getElementById("pitch").value),
+       speed: Number(document.getElementById("speed").value),
++      video_speed: Number(document.getElementById("video_speed").value),
+       ken_burns:
+         currentMode === "picture" &&
+         Boolean(document.getElementById("ken_burns") && document.getElementById("ken_burns").checked),
+     };
+ 
+     generateBtn.disabled = true;
+     setStatus("starting");
+ 
+     try {
+       const res = await fetch("/api/jobs", {
+diff --git a/src/roblox_viral/web/templates/generate.html b/src/roblox_viral/web/templates/generate.html
+index 9beb94e..230c5fa 100644
+--- a/src/roblox_viral/web/templates/generate.html
++++ b/src/roblox_viral/web/templates/generate.html
+@@ -11,49 +11,40 @@
+     </div>
+ 
+     <div id="roblox-source-block">
+       <label>
+         Source video
+         <select id="source_name" name="source_name">
+           {% if not sources %}
+           <option value="" disabled selected>No sources — upload in Library</option>
+           {% else %}
+           {% for s in sources %}
+-          <option value="{{ s.name }}">{{ s.name }}</option>
++          <option value="{{ s.name }}">{{ s.name }} {% if s.kind == "slice" %}(1m){% else %}(video){% endif %}</option>
+           {% endfor %}
+           {% endif %}
+         </select>
+       </label>
+     </div>
+ 
+     <div id="picture-source-block" hidden>
+       <label>
+         Source image
+         <select id="image_name" name="image_name">
+           {% if not images %}
+-          <option value="" disabled selected>No images — upload below</option>
++          <option value="" disabled selected>No images — upload in Library</option>
+           {% else %}
+           {% for img in images %}
+           <option value="{{ img.name }}">{{ img.name }}</option>
+           {% endfor %}
+           {% endif %}
+         </select>
+       </label>
+-      <div class="image-actions">
+-        <label>
+-          Upload image
+-          <input id="image-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+-        </label>
+-        <button id="image-upload-btn" type="button">Upload</button>
+-        <button id="image-delete-btn" type="button"{% if not images %} disabled{% endif %}>Delete</button>
+-      </div>
+-      <p id="image-error" class="error" hidden></p>
+       <label class="checkbox-field">
+         <input id="ken_burns" name="ken_burns" type="checkbox">
+         Ken Burns (slow zoom-in)
+       </label>
+     </div>
+ 
+     <label>
+       Story
+       <textarea id="story" name="story" rows="10" required placeholder="One sentence per line."></textarea>
+     </label>
+@@ -76,20 +67,25 @@
+     <label class="slider-field">
+       Pitch <span id="pitch-value">+15%</span>
+       <input id="pitch" name="pitch" type="range" min="-100" max="100" step="1" value="15" />
+     </label>
+ 
+     <label class="slider-field">
+       Speed <span id="speed-value">130%</span>
+       <input id="speed" name="speed" type="range" min="50" max="200" step="1" value="130" />
+     </label>
+ 
++    <label class="slider-field" id="video-speed-field">
++      Video speed <span id="video-speed-value">100%</span>
++      <input id="video_speed" name="video_speed" type="range" min="50" max="200" step="1" value="100" />
++    </label>
++
+     <button id="generate-btn" type="submit"{% if not sources %} disabled{% endif %}>Generate</button>
+   </form>
+ 
+   <section class="progress" aria-live="polite">
+     <p>Status: <span id="status">idle</span></p>
+     <p id="error" class="error" hidden></p>
+   </section>
+ 
+   <section class="result" id="result" hidden>
+     <video id="player" controls playsinline></video>

@@ -1,3 +1,48 @@
+# Task 6 Report: Library page three tabs
+
+**Date:** 2026-08-15  
+**Status:** DONE
+
+## Summary
+
+Rebuilt Library with accessible tabs for 1-minute clips, raw videos, and images. Added raw-video upload/delete routes, complete server-rendered media context, and JavaScript image upload/delete flows using the existing image API.
+
+## TDD Evidence
+
+### RED
+
+```text
+python -m pytest tests/web/test_library_routes.py -v
+```
+
+Result: **FAIL** — 3 failures: both raw-video routes returned 404 and the page lacked the three-tab media UI.
+
+### GREEN
+
+```text
+python -m pytest tests/web/test_library_routes.py -v
+python -m pytest tests/web -k library -v
+```
+
+Result: **PASS** — 3 route tests passed; all 23 library-focused web tests passed.
+
+## Implementation
+
+- Added `_library_ctx` with `sources`, `videos`, `images`, messages, errors, and active tab state.
+- Added `POST /library/videos/upload` and `POST /library/videos/delete`.
+- Added server-rendered lists and upload/delete controls for all three media types.
+- Recreated `library.js` with accessible tab switching and image API upload/delete flows.
+- Kept YouTube absent from the Library page.
+
+## Commit
+
+```text
+f001181 feat(web): Library tabs for slices, raw videos, and images
+```
+
+## Concerns
+
+- None. Existing unrelated `.superpowers/sdd` working-tree changes were not included in the commit.
 # Task 6 Report: Library routes + Generate page + Job API
 
 ## Status

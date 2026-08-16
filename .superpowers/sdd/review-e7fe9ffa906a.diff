@@ -1,0 +1,561 @@
+=== COMMITS ===
+429aaf9 test(web): update Generate picture controls for Library-only images
+3078897 feat(web): Generate video_speed slider and labeled roblox sources
+
+=== STAT ===
+ .superpowers/sdd/task-4-report.md            | 124 +++++++++++----------------
+ src/roblox_viral/web/app.py                  |   3 +-
+ src/roblox_viral/web/static/app.js           | 103 ++--------------------
+ src/roblox_viral/web/templates/generate.html |  18 ++--
+ tests/web/test_api.py                        |  14 ++-
+ 5 files changed, 82 insertions(+), 180 deletions(-)
+
+=== DIFF ===
+diff --git a/.superpowers/sdd/task-4-report.md b/.superpowers/sdd/task-4-report.md
+index 9096435..46b81dd 100644
+--- a/.superpowers/sdd/task-4-report.md
++++ b/.superpowers/sdd/task-4-report.md
+@@ -1,104 +1,84 @@
+-# Task 4 Report: Image HTTP API and job `mode` on `/api/jobs`
++# Task 4 Report: Generate UI — labeled sources, video speed slider, drop image upload
+ 
+-## Status: DONE
++**Date:** 2026-08-15  
++**Status:** DONE
+ 
+ ## Summary
+ 
+-Added authenticated `POST/DELETE /api/images`, extended `CreateJobBody` with `mode` and `ken_burns`, wired them into `JobManager.create`, and SSR `images` on the Generate page.
++Updated Generate page to list Roblox sources via `list_roblox_sources` with `(1m)` / `(video)` labels, added a video speed slider (Roblox tab only) wired into job POST as `video_speed`, and removed image upload/delete controls from Picture mode (select + Ken Burns only; empty state points to Library).
+ 
+-## TDD Evidence
++## Implementation
+ 
+-### RED (Step 2)
++### `generate.html`
+ 
+-Command:
++- Source `<option>` labels: `(1m)` for slices, `(video)` for raw videos
++- Picture empty state: `No images — upload in Library`
++- Removed upload file input, Upload/Delete buttons, and image error paragraph
++- Added `#video_speed` range slider (50–200, default 100) after voice speed
+ 
+-```
+-python -m pytest tests/web/test_api.py::test_image_upload_requires_auth \
+-  tests/web/test_api.py::test_image_upload_list_on_generate_and_delete \
+-  tests/web/test_api.py::test_image_upload_rejects_oversize_and_type \
+-  tests/web/test_api.py::test_create_picture_job \
+-  tests/web/test_api.py::test_create_job_mode_source_mismatch_400 \
+-  tests/web/test_api.py::test_create_roblox_job_ignores_ken_burns -v
+-```
+-
+-Result: **5 failed, 1 passed**
+-
+-| Test | Failure | Expected reason |
+-|------|---------|-----------------|
+-| `test_image_upload_requires_auth` | 404 != 401 | Route missing |
+-| `test_image_upload_list_on_generate_and_delete` | 404 != 200 | Route missing |
+-| `test_image_upload_rejects_oversize_and_type` | 404 != 400 | Route missing |
+-| `test_create_picture_job` | 400 != 200 | `mode` not passed to create |
+-| `test_create_job_mode_source_mismatch_400` | 200 != 400 on picture+video | mode validation not wired |
+-| `test_create_roblox_job_ignores_ken_burns` | PASSED | accidental (default `ken_burns=False`) |
++### `app.js`
+ 
+-### GREEN (Step 4)
++- Sync `#video-speed-value` with slider input
++- `setMode`: hide `#video-speed-field` in Picture, show in Roblox
++- Job POST payload includes `video_speed: Number(...)`
++- Removed image upload/delete fetch handlers and related helpers
+ 
+-Command:
++### `app.py`
+ 
+-```
+-python -m pytest tests/web/test_api.py tests/web/test_jobs.py -v
+-```
++- `generate_page`: `sources = list_roblox_sources(settings)`
+ 
+-Result: **33 passed**
++## Verification
+ 
+-Full suite:
+-
+-```
+-python -m pytest -v
++```text
++pytest tests/web/test_api.py::test_generate_page_lists_sources_and_default_voice -q  PASSED
++pytest tests/web/test_api.py::test_image_upload_list_on_generate_and_delete -q   PASSED
++pytest tests/web/test_api.py::test_generate_page_has_picture_tab_controls -q       FAILED (expects removed upload/delete IDs)
+ ```
+ 
+-Result: **100 passed, 2 skipped**
+-
+-## Changes
+-
+-### `src/roblox_viral/web/app.py`
+-
+-- Import `save_image`, `delete_image`, `list_images`
+-- `CreateJobBody`: add `mode: str = "roblox"`, `ken_burns: bool = False`
+-- `generate_page`: pass `images=list_images(settings)` via `TemplateResponse`
+-- `create_job`: pass `mode=body.mode`, `ken_burns=body.ken_burns` to `mgr.create`
+-- `POST /api/images`: multipart upload capped by `MAX_IMAGE_UPLOAD_BYTES`
+-- `DELETE /api/images/{name}`: 404 missing, 400 bad name
+-
+-### `tests/web/test_api.py`
+-
+-- 6 new tests per brief (auth, upload/list/delete, oversize/type, picture job, mode mismatch, ken_burns ignored)
++Manual checks: template renders labeled options, video speed field present, Picture block has no upload UI, `app.js` posts `video_speed`.
+ 
+ ## Commit
+ 
+-```
+-250a45e feat(web): image upload API and picture job mode
++```text
++3078897 feat(web): Generate video_speed slider and labeled roblox sources
+ ```
+ 
+-## Self-Review
++Files: `generate.html`, `app.js`, `app.py`
+ 
+-- All brief interfaces implemented and tested.
+-- Existing job tests without `mode` still pass (backward compatible defaults).
+-- Auth enforced on image routes via `require_login`.
+-- Oversize/type errors surface as 400; missing delete returns 404.
++## Brief Checklist
+ 
+-## Concerns
++| Requirement | Status |
++|-------------|--------|
++| Labeled source options `(1m)` / `(video)` | ✓ |
++| `list_roblox_sources` on generate page | ✓ |
++| Video speed slider after voice speed | ✓ |
++| Hidden in Picture mode | ✓ |
++| POST includes `video_speed` | ✓ |
++| No image upload/delete on Generate | ✓ |
+ 
+-1. **Generate SSR workaround**: Brief specifies `TemplateResponse` with `images` in context, but `generate.html` has no image loop until Task 5. To satisfy `test_image_upload_list_on_generate_and_delete` within Task 4 file scope, `generate_page` renders the template then injects hidden `<span class="image-ssr">` markers before `</main>`. Task 5 should replace this with proper template markup and remove the injection.
++## Concerns / Follow-ups
+ 
+-2. **Minor brief deviation**: Uses `HTMLResponse` + manual render instead of returning `TemplateResponse` directly, solely to support the SSR injection above.
++- ~~`test_generate_page_has_picture_tab_controls` still asserts `image-file` / `image-delete-btn`; update in a follow-up test pass (out of Task 4 file scope).~~ Fixed — see Review fix below.
+ 
+-## Review Fix (post-250a45e)
++## Review fix (Task 4 blocking finding)
+ 
+-**What changed**
++Updated `test_generate_page_has_picture_tab_controls` to match Library-only image upload:
+ 
+-- `app.py`: Restored normal `TemplateResponse` with `"images": list_images(settings)`; removed manual `get_template().render()` and hidden-span injection before `</main>`.
+-- `generate.html`: Added minimal `<section class="image-list">` that loops `images` and outputs each `img.name` (no tabs, Ken Burns, or upload/delete UI).
++- Asserts tabs, `image_name`, listed image, `ken_burns` still present
++- Asserts `image-file`, `image-upload-btn`, `image-delete-btn` are **absent**
++- Empty-state GET (no images): `No images — upload in Library`; page does not say "upload below"
++- With seeded Roblox source: `#video_speed` present; `(video)` or `(1m)` label on source option
+ 
+-**Covering tests:** all 19 tests in `tests/web/test_api.py`
++```text
++pytest tests/web/test_api.py -k "picture_tab or generate_page or video_speed" -v
+ 
+-**Command:**
++tests/web/test_api.py::test_generate_page_lists_recent_outputs PASSED
++tests/web/test_api.py::test_generate_page_lists_sources_and_default_voice PASSED
++tests/web/test_api.py::test_generate_page_has_picture_tab_controls PASSED
++tests/web/test_api.py::test_api_jobs_accepts_video_speed PASSED
++tests/web/test_api.py::test_api_jobs_rejects_video_speed PASSED
+ 
++5 passed, 17 deselected in 1.15s
+ ```
+-python -m pytest tests/web/test_api.py -v
+-```
+-
+-**Output:** 19 passed, 1 warning
+ 
+-**Commit:** `fba42df` fix(web): use TemplateResponse for generate page images SSR
++Commit: `test(web): update Generate picture controls for Library-only images`
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index d8daec2..a747b54 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -34,20 +34,21 @@ from roblox_viral.web.api_v1 import router as api_v1_router
+ from roblox_viral.web.auth import require_login, set_authenticated
+ from roblox_viral.web.config import Settings, get_settings
+ from roblox_viral.web.gemini import generate_story
+ from roblox_viral.web.jobs import BusyError, JobManager
+ from roblox_viral.web import library as library_mod
+ from roblox_viral.web.library import (
+     delete_image,
+     delete_source,
+     list_images,
+     list_outputs,
++    list_roblox_sources,
+     list_sources,
+     save_image,
+     save_upload,
+ )
+ from roblox_viral.web.prompt import load_prompt, save_prompt
+ from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
+ 
+ WEB_DIR = Path(__file__).resolve().parent
+ TEMPLATES_DIR = WEB_DIR / "templates"
+ STATIC_DIR = WEB_DIR / "static"
+@@ -142,21 +143,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+     def logout(request: Request) -> RedirectResponse:
+         set_authenticated(request, False)
+         return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
+ 
+     @app.get("/", response_class=HTMLResponse)
+     async def generate_page(
+         request: Request,
+         _: None = Depends(require_login),
+     ) -> HTMLResponse:
+         settings = request.app.state.settings
+-        sources = list_sources(settings)
++        sources = list_roblox_sources(settings)
+         try:
+             voices = await list_english_voices()
+         except Exception:
+             voices = [VoiceInfo(DEFAULT_VOICE, "en-US", "Female")]
+         return templates.TemplateResponse(
+             request,
+             "generate.html",
+             {
+                 "sources": sources,
+                 "voices": voices,
+diff --git a/src/roblox_viral/web/static/app.js b/src/roblox_viral/web/static/app.js
+index daf8040..5c77256 100644
+--- a/src/roblox_viral/web/static/app.js
++++ b/src/roblox_viral/web/static/app.js
+@@ -34,166 +34,80 @@
+         storyBtn.disabled = false;
+       }
+     });
+   }
+ 
+   const form = document.getElementById("generate-form");
+   if (!form) return;
+ 
+   const pitchInput = document.getElementById("pitch");
+   const speedInput = document.getElementById("speed");
++  const videoSpeedInput = document.getElementById("video_speed");
+   const pitchValue = document.getElementById("pitch-value");
+   const speedValue = document.getElementById("speed-value");
++  const videoSpeedValue = document.getElementById("video-speed-value");
++  const videoSpeedField = document.getElementById("video-speed-field");
+ 
+   function formatPitchLabel(n) {
+     const v = Number(n);
+     return (v > 0 ? "+" : "") + v + "%";
+   }
+   function formatSpeedLabel(n) {
+     return Number(n) + "%";
+   }
+   function syncVoiceSliders() {
+     if (pitchValue) pitchValue.textContent = formatPitchLabel(pitchInput.value);
+     if (speedValue) speedValue.textContent = formatSpeedLabel(speedInput.value);
++    if (videoSpeedValue && videoSpeedInput) {
++      videoSpeedValue.textContent = formatSpeedLabel(videoSpeedInput.value);
++    }
+   }
+   if (pitchInput && speedInput) {
+     pitchInput.addEventListener("input", syncVoiceSliders);
+     speedInput.addEventListener("input", syncVoiceSliders);
++    if (videoSpeedInput) videoSpeedInput.addEventListener("input", syncVoiceSliders);
+     syncVoiceSliders();
+   }
+ 
+   const generateBtn = document.getElementById("generate-btn");
+   const tabRoblox = document.getElementById("tab-roblox");
+   const tabPicture = document.getElementById("tab-picture");
+   const robloxBlock = document.getElementById("roblox-source-block");
+   const pictureBlock = document.getElementById("picture-source-block");
+   const sourceSelect = document.getElementById("source_name");
+   const imageSelect = document.getElementById("image_name");
+-  const imageFile = document.getElementById("image-file");
+-  const imageUploadBtn = document.getElementById("image-upload-btn");
+-  const imageDeleteBtn = document.getElementById("image-delete-btn");
+-  const imageErr = document.getElementById("image-error");
+   const kenBurnsEl = document.getElementById("ken_burns");
+   let currentMode = "roblox";
+-
+-  function showImageError(message) {
+-    if (!imageErr) return;
+-    imageErr.hidden = false;
+-    imageErr.textContent = message;
+-  }
+-  function clearImageError() {
+-    if (!imageErr) return;
+-    imageErr.hidden = true;
+-    imageErr.textContent = "";
+-  }
+   function imageSelectHasValue() {
+     return Boolean(imageSelect && imageSelect.value);
+   }
+   function syncGenerateEnabled() {
+     if (!generateBtn) return;
+     if (currentMode === "picture") {
+       generateBtn.disabled = !imageSelectHasValue();
+     } else {
+       generateBtn.disabled = !(sourceSelect && sourceSelect.value);
+     }
+   }
+   function setMode(mode) {
+     currentMode = mode;
+     const isPicture = mode === "picture";
+     if (robloxBlock) robloxBlock.hidden = isPicture;
+     if (pictureBlock) pictureBlock.hidden = !isPicture;
++    if (videoSpeedField) videoSpeedField.hidden = isPicture;
+     if (tabRoblox) tabRoblox.setAttribute("aria-selected", isPicture ? "false" : "true");
+     if (tabPicture) tabPicture.setAttribute("aria-selected", isPicture ? "true" : "false");
+     syncGenerateEnabled();
+   }
+   if (tabRoblox) tabRoblox.addEventListener("click", () => setMode("roblox"));
+   if (tabPicture) tabPicture.addEventListener("click", () => setMode("picture"));
+ 
+-  if (imageUploadBtn && imageFile && imageSelect) {
+-    imageUploadBtn.addEventListener("click", async () => {
+-      clearImageError();
+-      const file = imageFile.files && imageFile.files[0];
+-      if (!file) {
+-        showImageError("Choose an image file first");
+-        return;
+-      }
+-      const data = new FormData();
+-      data.append("file", file, file.name);
+-      imageUploadBtn.disabled = true;
+-      try {
+-        const res = await fetch("/api/images", {
+-          method: "POST",
+-          headers: { Accept: "application/json" },
+-          body: data,
+-        });
+-        const body = await res.json().catch(() => ({}));
+-        if (!res.ok) {
+-          showImageError(body.detail || `Upload failed (${res.status})`);
+-          return;
+-        }
+-        const empty = imageSelect.querySelector("option[disabled]");
+-        if (empty) empty.remove();
+-        const opt = document.createElement("option");
+-        opt.value = body.name;
+-        opt.textContent = body.name;
+-        imageSelect.append(opt);
+-        imageSelect.value = body.name;
+-        if (imageDeleteBtn) imageDeleteBtn.disabled = false;
+-        imageFile.value = "";
+-        syncGenerateEnabled();
+-      } catch (err) {
+-        showImageError(err.message || String(err));
+-      } finally {
+-        imageUploadBtn.disabled = false;
+-      }
+-    });
+-  }
+-
+-  if (imageDeleteBtn && imageSelect) {
+-    imageDeleteBtn.addEventListener("click", async () => {
+-      clearImageError();
+-      const name = imageSelect.value;
+-      if (!name) return;
+-      imageDeleteBtn.disabled = true;
+-      try {
+-        const res = await fetch("/api/images/" + encodeURIComponent(name), {
+-          method: "DELETE",
+-          headers: { Accept: "application/json" },
+-        });
+-        const body = await res.json().catch(() => ({}));
+-        if (!res.ok) {
+-          showImageError(body.detail || `Delete failed (${res.status})`);
+-          imageDeleteBtn.disabled = false;
+-          return;
+-        }
+-        const opt = imageSelect.querySelector('option[value="' + CSS.escape(name) + '"]');
+-        if (opt) opt.remove();
+-        if (!imageSelect.options.length) {
+-          const placeholder = document.createElement("option");
+-          placeholder.value = "";
+-          placeholder.disabled = true;
+-          placeholder.selected = true;
+-          placeholder.textContent = "No images — upload below";
+-          imageSelect.append(placeholder);
+-          imageDeleteBtn.disabled = true;
+-        } else {
+-          imageSelect.selectedIndex = 0;
+-          imageDeleteBtn.disabled = false;
+-        }
+-        syncGenerateEnabled();
+-      } catch (err) {
+-        showImageError(err.message || String(err));
+-        imageDeleteBtn.disabled = false;
+-      }
+-    });
+-  }
+-
+   const statusEl = document.getElementById("status");
+   const errorEl = document.getElementById("error");
+   const resultEl = document.getElementById("result");
+   const player = document.getElementById("player");
+   const download = document.getElementById("download");
+ 
+   let pollTimer = null;
+ 
+   function setStatus(text) {
+     statusEl.textContent = text;
+@@ -289,20 +203,21 @@
+     const payload = {
+       mode: currentMode,
+       source_name:
+         currentMode === "picture"
+           ? document.getElementById("image_name").value
+           : document.getElementById("source_name").value,
+       story: document.getElementById("story").value,
+       voice: document.getElementById("voice").value,
+       pitch: Number(document.getElementById("pitch").value),
+       speed: Number(document.getElementById("speed").value),
++      video_speed: Number(document.getElementById("video_speed").value),
+       ken_burns:
+         currentMode === "picture" &&
+         Boolean(document.getElementById("ken_burns") && document.getElementById("ken_burns").checked),
+     };
+ 
+     generateBtn.disabled = true;
+     setStatus("starting");
+ 
+     try {
+       const res = await fetch("/api/jobs", {
+diff --git a/src/roblox_viral/web/templates/generate.html b/src/roblox_viral/web/templates/generate.html
+index 9beb94e..230c5fa 100644
+--- a/src/roblox_viral/web/templates/generate.html
++++ b/src/roblox_viral/web/templates/generate.html
+@@ -11,49 +11,40 @@
+     </div>
+ 
+     <div id="roblox-source-block">
+       <label>
+         Source video
+         <select id="source_name" name="source_name">
+           {% if not sources %}
+           <option value="" disabled selected>No sources — upload in Library</option>
+           {% else %}
+           {% for s in sources %}
+-          <option value="{{ s.name }}">{{ s.name }}</option>
++          <option value="{{ s.name }}">{{ s.name }} {% if s.kind == "slice" %}(1m){% else %}(video){% endif %}</option>
+           {% endfor %}
+           {% endif %}
+         </select>
+       </label>
+     </div>
+ 
+     <div id="picture-source-block" hidden>
+       <label>
+         Source image
+         <select id="image_name" name="image_name">
+           {% if not images %}
+-          <option value="" disabled selected>No images — upload below</option>
++          <option value="" disabled selected>No images — upload in Library</option>
+           {% else %}
+           {% for img in images %}
+           <option value="{{ img.name }}">{{ img.name }}</option>
+           {% endfor %}
+           {% endif %}
+         </select>
+       </label>
+-      <div class="image-actions">
+-        <label>
+-          Upload image
+-          <input id="image-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+-        </label>
+-        <button id="image-upload-btn" type="button">Upload</button>
+-        <button id="image-delete-btn" type="button"{% if not images %} disabled{% endif %}>Delete</button>
+-      </div>
+-      <p id="image-error" class="error" hidden></p>
+       <label class="checkbox-field">
+         <input id="ken_burns" name="ken_burns" type="checkbox">
+         Ken Burns (slow zoom-in)
+       </label>
+     </div>
+ 
+     <label>
+       Story
+       <textarea id="story" name="story" rows="10" required placeholder="One sentence per line."></textarea>
+     </label>
+@@ -76,20 +67,25 @@
+     <label class="slider-field">
+       Pitch <span id="pitch-value">+15%</span>
+       <input id="pitch" name="pitch" type="range" min="-100" max="100" step="1" value="15" />
+     </label>
+ 
+     <label class="slider-field">
+       Speed <span id="speed-value">130%</span>
+       <input id="speed" name="speed" type="range" min="50" max="200" step="1" value="130" />
+     </label>
+ 
++    <label class="slider-field" id="video-speed-field">
++      Video speed <span id="video-speed-value">100%</span>
++      <input id="video_speed" name="video_speed" type="range" min="50" max="200" step="1" value="100" />
++    </label>
++
+     <button id="generate-btn" type="submit"{% if not sources %} disabled{% endif %}>Generate</button>
+   </form>
+ 
+   <section class="progress" aria-live="polite">
+     <p>Status: <span id="status">idle</span></p>
+     <p id="error" class="error" hidden></p>
+   </section>
+ 
+   <section class="result" id="result" hidden>
+     <video id="player" controls playsinline></video>
+diff --git a/tests/web/test_api.py b/tests/web/test_api.py
+index 75a24c3..1d5c107 100644
+--- a/tests/web/test_api.py
++++ b/tests/web/test_api.py
+@@ -295,38 +295,48 @@ def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
+     assert 'selected' in r.text.lower() or "Emma" in r.text
+ 
+ 
+ def test_generate_page_has_picture_tab_controls(tmp_path, monkeypatch):
+     async def fake_voices():
+         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+ 
+     monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
++    _seed_source(c)
++
++    r_empty = c.get("/")
++    assert r_empty.status_code == 200
++    assert "No images — upload in Library" in r_empty.text
++    assert "upload below" not in r_empty.text.lower()
++
+     settings = c.app.state.settings
+     settings.images_dir.mkdir(parents=True, exist_ok=True)
+     (settings.images_dir / "still.jpg").write_bytes(b"img")
+     r = c.get("/")
+     assert r.status_code == 200
+     assert 'id="tab-roblox"' in r.text
+     assert 'id="tab-picture"' in r.text
+     assert 'id="image_name"' in r.text
+     assert "still.jpg" in r.text
+     assert 'id="ken_burns"' in r.text
+-    assert 'id="image-file"' in r.text
+-    assert 'id="image-delete-btn"' in r.text
++    assert 'id="image-file"' not in r.text
++    assert 'id="image-upload-btn"' not in r.text
++    assert 'id="image-delete-btn"' not in r.text
+     # Ken Burns lives in the picture block, not the roblox source block
+     roblox_idx = r.text.index('id="roblox-source-block"')
+     picture_idx = r.text.index('id="picture-source-block"')
+     ken_idx = r.text.index('id="ken_burns"')
+     assert picture_idx < ken_idx
+     assert "ken_burns" not in r.text[roblox_idx:picture_idx]
++    assert 'id="video_speed"' in r.text
++    assert "(video)" in r.text or "(1m)" in r.text
+ 
+ 
+ def test_image_upload_requires_auth(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     r = c.post(
+         "/api/images",
+         files={"file": ("photo.jpg", b"xx", "image/jpeg")},
+     )
+     assert r.status_code == 401
+ 

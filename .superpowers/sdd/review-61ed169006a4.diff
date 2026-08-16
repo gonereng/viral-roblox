@@ -1,0 +1,291 @@
+=== COMMITS ===
+041ecc2 feat: overlay timed Reddit title card in render_video
+
+=== STAT ===
+ src/roblox_viral/render.py | 79 ++++++++++++++++++++++++++++++++++++++++++--
+ tests/test_render.py       | 82 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 159 insertions(+), 2 deletions(-)
+
+=== DIFF ===
+diff --git a/src/roblox_viral/render.py b/src/roblox_viral/render.py
+index dd2744d..11564e6 100644
+--- a/src/roblox_viral/render.py
++++ b/src/roblox_viral/render.py
+@@ -163,20 +163,22 @@ def _playback_setpts(video_speed: int) -> str | None:
+ def render_video(
+     *,
+     video_path: Path | str,
+     audio_path: Path | str,
+     ass_path: Path | str,
+     output_path: Path | str,
+     keep_temp: bool = False,
+     work_dir: Path | str | None = None,
+     overlay_path: Path | str | None = None,
+     video_speed: int = 100,
++    title_card_path: Path | str | None = None,
++    title_card_until_s: float | None = None,
+ ) -> Path:
+     """
+     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
+ 
+     When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
+     composite it centered (fit inside full frame) over captions at the start.
+ 
+     Original video audio is discarded by mapping only the TTS audio stream.
+     Intermediate files live under work_dir when provided; otherwise only final out is kept
+     unless keep_temp is True (work_dir is then left for the caller).
+@@ -194,29 +196,37 @@ def render_video(
+         raise RenderError(f"Audio not found: {audio}")
+     if not ass.is_file():
+         raise RenderError(f"Captions not found: {ass}")
+ 
+     overlay: Path | None = None
+     if overlay_path is not None:
+         overlay = Path(overlay_path)
+         if not overlay.is_file():
+             raise RenderError(f"Overlay video not found: {overlay}")
+ 
++    title_card: Path | None = None
++    if title_card_path is not None:
++        title_card = Path(title_card_path)
++        if not title_card.is_file():
++            raise RenderError(f"Title card not found: {title_card}")
++        if title_card_until_s is None or title_card_until_s <= 0:
++            raise RenderError("title_card_until_s must be greater than 0")
++
+     out.parent.mkdir(parents=True, exist_ok=True)
+     if work_dir is not None:
+         Path(work_dir).mkdir(parents=True, exist_ok=True)
+ 
+     audio_duration = probe_duration_seconds(audio)
+     ass_escaped = _ass_filter_path(ass)
+     setpts = _playback_setpts(video_speed)
+ 
+-    if overlay is None:
++    if overlay is None and title_card is None:
+         parts = [
+             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+         ]
+         if setpts:
+             parts.append(setpts)
+         parts.append(f"ass='{ass_escaped}'")
+         vf = ",".join(parts)
+         cmd = [
+             ffmpeg,
+@@ -243,21 +253,21 @@ def render_video(
+             "18",
+             "-c:a",
+             "aac",
+             "-b:a",
+             "192k",
+             "-shortest",
+             "-movflags",
+             "+faststart",
+             str(out),
+         ]
+-    else:
++    elif overlay is not None and title_card is None:
+         base_parts = [
+             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+         ]
+         if setpts:
+             base_parts.append(setpts)
+         base = ",".join(base_parts)
+         fc = (
+             f"[0:v]{base}[base];"
+             f"[base]ass='{ass_escaped}'[cap];"
+@@ -294,20 +304,85 @@ def render_video(
+             "18",
+             "-c:a",
+             "aac",
+             "-b:a",
+             "192k",
+             "-shortest",
+             "-movflags",
+             "+faststart",
+             str(out),
+         ]
++    else:
++        base_parts = [
++            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
++            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
++        ]
++        if setpts:
++            base_parts.append(setpts)
++        base = ",".join(base_parts)
++
++        inputs = [
++            ffmpeg,
++            "-y",
++            "-stream_loop",
++            "-1",
++            "-i",
++            str(video),
++            "-i",
++            str(audio),
++        ]
++        filter_parts = [f"[0:v]{base}[base]", f"[base]ass='{ass_escaped}'[cap]"]
++        title_input_index = 2
++        title_base = "[cap]"
++        if overlay is not None:
++            inputs.extend(["-t", f"{OVERLAY_DURATION_S}", "-i", str(overlay)])
++            filter_parts.extend(
++                [
++                    f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
++                    f"format=yuva420p,scale={OVERLAY_MAX_W}:{OVERLAY_MAX_H}:"
++                    "force_original_aspect_ratio=decrease[ov]",
++                    f"[cap][ov]overlay=(W-w)/2:(H-h)/2:"
++                    f"enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[with_overlay]",
++                ]
++            )
++            title_input_index = 3
++            title_base = "[with_overlay]"
++
++        inputs.extend(["-i", str(title_card)])
++        filter_parts.append(
++            f"{title_base}[{title_input_index}:v]"
++            f"overlay=(W-w)/2:(H/2-h):enable='lte(t,{title_card_until_s:.3f})'[outv]"
++        )
++        cmd = inputs + [
++            "-t",
++            f"{audio_duration:.3f}",
++            "-filter_complex",
++            ";".join(filter_parts),
++            "-map",
++            "[outv]",
++            "-map",
++            "1:a:0",
++            "-c:v",
++            "libx264",
++            "-preset",
++            "medium",
++            "-crf",
++            "18",
++            "-c:a",
++            "aac",
++            "-b:a",
++            "192k",
++            "-shortest",
++            "-movflags",
++            "+faststart",
++            str(out),
++        ]
+ 
+     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+     if result.returncode != 0:
+         raise RenderError(
+             "ffmpeg render failed:\n"
+             + (result.stderr[-2000:] if result.stderr else "no stderr")
+         )
+ 
+     return out
+ 
+diff --git a/tests/test_render.py b/tests/test_render.py
+index 62357f6..22b2c87 100644
+--- a/tests/test_render.py
++++ b/tests/test_render.py
+@@ -91,20 +91,102 @@ def test_render_video_with_overlay_uses_filter_complex(tmp_path, monkeypatch):
+     assert "eof_action=pass" in cmd
+     assert str(overlay) in seen["cmd"]
+     idx = seen["cmd"].index(str(overlay))
+     assert seen["cmd"][idx - 1] == "-i"
+     assert seen["cmd"][idx - 3 : idx - 1] in (["-t", "3.5"], ["-t", "3.500"])
+     assert "-map" in seen["cmd"]
+     assert "[outv]" in seen["cmd"]
+     assert "1:a:0" in seen["cmd"]
+ 
+ 
++def test_render_video_title_card_overlay_enable(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    card = _touch(tmp_path / "card.png")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        title_card_path=card,
++        title_card_until_s=1.25,
++        overlay_path=None,
++    )
++
++    cmd = seen["cmd"]
++    fc = cmd[cmd.index("-filter_complex") + 1]
++    assert "[0:v]scale=1080:1920:force_original_aspect_ratio=increase" in fc
++    assert "[base]ass=" in fc
++    assert "[cap][2:v]overlay=(W-w)/2:(H/2-h):enable='lte(t,1.250)'[outv]" in fc
++    assert cmd[cmd.index(str(card)) - 1] == "-i"
++    assert cmd.index(str(card)) > cmd.index(str(audio))
++    assert cmd[cmd.index("-map") + 1] == "[outv]"
++    assert "1:a:0" in cmd
++
++
++@pytest.mark.parametrize("until_s", [None, 0, -0.1])
++def test_render_video_title_card_requires_positive_duration(
++    tmp_path, monkeypatch, until_s
++):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    card = _touch(tmp_path / "card.png")
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    with pytest.raises(RenderError, match="title_card_until_s"):
++        render_video(
++            video_path=video,
++            audio_path=audio,
++            ass_path=ass,
++            output_path=tmp_path / "out.mp4",
++            title_card_path=card,
++            title_card_until_s=until_s,
++        )
++
++
++def test_render_video_missing_title_card_path_raises(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    with pytest.raises(RenderError, match="Title card"):
++        render_video(
++            video_path=video,
++            audio_path=audio,
++            ass_path=ass,
++            output_path=tmp_path / "out.mp4",
++            title_card_path=tmp_path / "missing.png",
++            title_card_until_s=1,
++        )
++
++
+ def test_render_video_missing_overlay_path_raises(tmp_path, monkeypatch):
+     video = _touch(tmp_path / "game.mp4")
+     audio = _touch(tmp_path / "n.mp3")
+     ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+     out = tmp_path / "out.mp4"
+     monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 1.0)
+     monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+     with pytest.raises(RenderError, match="Overlay"):
+         render_video(
+             video_path=video,

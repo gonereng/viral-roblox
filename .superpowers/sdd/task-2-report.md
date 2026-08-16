@@ -1,52 +1,85 @@
-# Task 2 Report: Multipart create endpoint
+# Task 2 Report: `videos_dir` + raw video library helpers
 
-## What was implemented
+**Date:** 2026-08-15  
+**Status:** DONE
 
-- **`POST /api/v1/videos`** now accepts multipart form fields (`voice`, `story`, `type`, `source_name`) plus optional `media` file upload.
-- **Library-backed validation**: video/image filename checks and size limits via `validate_video_filename`, `validate_image_filename`, `MAX_UPLOAD_BYTES`, `MAX_IMAGE_UPLOAD_BYTES`.
-- **Ephemeral uploads**: media files stored as `jobs/{id}/input.<ext>` with `ephemeral=True`; library `source_name` path unchanged.
-- **Mutual exclusion**: 400 if both `media` and `source_name` provided, or neither.
-- **Removed** unused `CreateVideoBody` Pydantic model.
+## Summary
 
-## What was tested and results
-
-| Scope | Command | Result |
-|-------|---------|--------|
-| Focused (task) | `pytest tests/web/test_api_v1.py -v` | 13 passed |
-| Full suite | `pytest tests/web/test_api_v1.py tests/web/test_jobs.py -q` | 29 passed |
+Added `Settings.videos_dir` (`media_root / "videos"`), extended `ensure_media_dirs`, and implemented raw video library helpers (`save_video`, `list_videos`, `resolve_video`, `delete_video`, `resolve_roblox_media`, `list_roblox_sources`) plus `RobloxSource` dataclass. Raw uploads are stored as-is with exclusive-create collision handling (mirrors images); no slicing.
 
 ## TDD Evidence
 
-### RED
+### RED — Step 2 (failing tests before implementation)
+
+Command:
 
 ```text
-pytest tests/web/test_api_v1.py -v
+pytest tests/web/test_library.py -k "save_video or resolve_roblox or list_roblox" -v
 ```
 
-```
-10 failed, 3 passed
-422 Unprocessable Entity (JSON body expected, form data sent)
-```
-
-### GREEN
+Result: **FAIL** (exit code 1) — 4 failed
 
 ```text
-pytest tests/web/test_api_v1.py tests/web/test_jobs.py -q
+AttributeError: module 'roblox_viral.web.library' has no attribute 'save_video'
+AttributeError: 'Settings' object has no attribute 'videos_dir'
 ```
 
+### GREEN — Step 4 (targeted + full suite)
+
+Command:
+
+```text
+pytest tests/web/test_library.py -k "save_video or resolve_roblox or list_roblox" -v
+pytest tests/web/test_library.py -v
 ```
-29 passed in 1.61s
-```
+
+Result: **PASS** (exit code 0) — **4 passed** (targeted), **17 passed in 3.50s** (full suite)
+
+New tests:
+
+| Test | Result |
+|------|--------|
+| `test_save_video_stores_as_is_no_slice` | PASSED |
+| `test_resolve_roblox_media_sources_win` | PASSED |
+| `test_resolve_roblox_media_falls_back_to_videos` | PASSED |
+| `test_list_roblox_sources_labels_kinds` | PASSED |
+
+## Changes
+
+### `src/roblox_viral/web/config.py`
+
+- `videos_dir` property → `media_root / "videos"`
+- `ensure_media_dirs` now creates `videos_dir` alongside sources/images/outputs/jobs
+
+### `src/roblox_viral/web/library.py`
+
+- `@dataclass(frozen=True) class RobloxSource` with `kind` in `{"slice","video"}`
+- `_commit_video_upload` — exclusive create with UUID suffix on collision
+- `list_videos`, `resolve_video`, `save_video`, `delete_video`
+- `resolve_roblox_media` — sources first, fallback to videos on `FileNotFoundError`
+- `list_roblox_sources` — all slices (sorted) then all videos (sorted)
 
 ## Commit
 
-```
-feat(web): accept multipart media on n8n video create
+```text
+fc88918 feat(web): add media/videos library helpers for raw uploads
 ```
 
-Files: `src/roblox_viral/web/api_v1.py`, `tests/web/test_api_v1.py`
+Files committed: `config.py`, `library.py`, `tests/web/test_library.py`
+
+## Self-Review
+
+| Check | OK? | Notes |
+|-------|-----|-------|
+| `videos_dir` path matches brief | ✓ | `media_root / "videos"` |
+| `ensure_media_dirs` includes videos | ✓ | All five dirs created |
+| Raw upload, no slice | ✓ | `save_video` never calls `slice_into_minute_parts` |
+| Size limit uses `MAX_UPLOAD_BYTES` | ✓ | Same as `save_upload` |
+| Exclusive create like images | ✓ | `_commit_video_upload` mirrors `_commit_image_upload` |
+| Sources win over videos on name clash | ✓ | `resolve_roblox_media` tries `resolve_source` first |
+| `list_roblox_sources` order | ✓ | Slices then videos, each sorted |
+| No UI/routes/jobs added | ✓ | Library helpers only |
 
 ## Concerns
 
-- Upload reads entire file into memory before size check; acceptable per plan but could use `_read_upload_capped` for streaming in a follow-up.
-- No dedicated test for oversize upload rejection on this endpoint (covered indirectly via library tests).
+None. Ready for downstream tasks (UI/routes/jobs).

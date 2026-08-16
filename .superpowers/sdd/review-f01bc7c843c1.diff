@@ -1,0 +1,787 @@
+=== COMMITS ===
+1237bbe docs: mention Reddit title card overlay
+ab59cce feat(web): attach Reddit title card and disable subscribe overlay
+041ecc2 feat: overlay timed Reddit title card in render_video
+06a4742 feat: generate Reddit title card PNG with Pillow
+1930d8f chore: add Pillow and reddit avatar asset
+
+=== STAT ===
+ README.md                                 |   8 +-
+ pyproject.toml                            |   1 +
+ src/roblox_viral/assets/reddit_avatar.png | Bin 0 -> 1260 bytes
+ src/roblox_viral/reddit_card.py           | 147 ++++++++++++++++++++++++++++++
+ src/roblox_viral/render.py                |  79 +++++++++++++++-
+ src/roblox_viral/web/jobs.py              |  15 ++-
+ tests/test_reddit_card.py                 |  34 +++++++
+ tests/test_render.py                      |  82 +++++++++++++++++
+ tests/web/test_jobs.py                    | 102 ++++++++++++++++++++-
+ 9 files changed, 461 insertions(+), 7 deletions(-)
+
+=== DIFF ===
+diff --git a/README.md b/README.md
+index 6a19bc8..3eaf4d2 100644
+--- a/README.md
++++ b/README.md
+@@ -57,23 +57,25 @@ Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story p
+ | **1-minute clips** | Upload gameplay; split into complete one-minute slices (`media/sources/`) |
+ | **Videos** | Upload full clips as-is, no slicing (`media/videos/`) |
+ | **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
+ 
+ On **Generate**, pick a background mode via three tabs:
+ 
+ | Tab | Behavior |
+ |-----|----------|
+ | **Single background video** | Pick a one-minute clip from Library → 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Greenscreen overlay at start. |
+ | **Picture** | Pick an image from Library → Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
+-| **Reddit** | No source picker — auto-concat random clips from Library → Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Greenscreen overlay at start. Requires at least one video in the Videos pool. |
++| **Reddit** | No source picker — auto-concat random clips from Library → Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Requires at least one video in the Videos pool. |
+ 
+-The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080×1920 frame** (2× the former half-height target), chromakeyed, and centered. Applies to **Single** and **Reddit** only.
++**Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The subscribe greenscreen overlay is not used for Reddit yet.
++
++The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080×1920 frame** (2× the former half-height target), chromakeyed, and centered. Applies to **Single** only.
+ 
+ ### Local run
+ 
+ ```bash
+ # Windows
+ set APP_PASSWORD=your-password
+ set APP_SECRET=your-long-random-secret
+ 
+ # macOS / Linux
+ export APP_PASSWORD=your-password
+@@ -93,21 +95,21 @@ Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload media in **Librar
+ 
+ Optional env vars:
+ 
+ | Variable | Description |
+ |----------|-------------|
+ | `MEDIA_ROOT` | Upload/output directory (default: `./media`) |
+ | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
+ | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
+ | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
+ | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
+-| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are chromakeyed, scaled to fit inside the full 1080×1920 frame, centered, and composited at the start of **Single** and **Reddit** videos (audio ignored). |
++| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are chromakeyed, scaled to fit inside the full 1080×1920 frame, centered, and composited at the start of **Single** videos (audio ignored). |
+ 
+ ### n8n API
+ 
+ Set `API_KEY` in `.env`. Header: `X-API-Key`.
+ 
+ **Create** — `POST /api/v1/videos` as `multipart/form-data`:
+ 
+ - `voice`, `story`, `type` (`single`|`reddit`|`leni`; `roblox` is rejected — use `single`)
+ - optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50…200, default 100)
+ - for `single` or `leni`: either file field `media` **or** text field `source_name` (Library clip or raw video/image name)
+diff --git a/pyproject.toml b/pyproject.toml
+index e5a81a0..2a09ad6 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -9,20 +9,21 @@ description = "Generate vertical Roblox storytime videos with TTS and karaoke ca
+ readme = "README.md"
+ requires-python = ">=3.10"
+ dependencies = [
+   "edge-tts>=6.1.9",
+   "fastapi>=0.115.0",
+   "uvicorn[standard]>=0.30.0",
+   "jinja2>=3.1.0",
+   "python-multipart>=0.0.9",
+   "itsdangerous>=2.2.0",
+   "httpx>=0.27.0",
++  "Pillow>=10.0.0",
+ ]
+ 
+ [project.scripts]
+ roblox-viral = "roblox_viral.cli:main"
+ roblox-viral-web = "roblox_viral.web.app:main"
+ 
+ [tool.setuptools.packages.find]
+ where = ["src"]
+ 
+ [tool.setuptools.package-data]
+diff --git a/src/roblox_viral/assets/reddit_avatar.png b/src/roblox_viral/assets/reddit_avatar.png
+new file mode 100644
+index 0000000..55f54a3
+Binary files /dev/null and b/src/roblox_viral/assets/reddit_avatar.png differ
+diff --git a/src/roblox_viral/reddit_card.py b/src/roblox_viral/reddit_card.py
+new file mode 100644
+index 0000000..3feecd2
+--- /dev/null
++++ b/src/roblox_viral/reddit_card.py
+@@ -0,0 +1,147 @@
++"""Render a Reddit-style title card and calculate its narration duration."""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++from PIL import Image, ImageDraw, ImageFont
++
++from roblox_viral.captions import partition_words_by_sentences
++from roblox_viral.voice import WordTiming
++
++DEFAULT_REDDIT_USERNAME = "Resident_Vehicle2780"
++CARD_WIDTH = 972
++CARD_BG = (26, 26, 27, 255)
++
++_PADDING = 24
++_AVATAR_SIZE = 40
++_HEADER_HEIGHT = 40
++_TITLE_GAP = 18
++_BOTTOM_PADDING = 28
++_TITLE_SPACING = 8
++
++
++def first_sentence_end_s(
++    sentences: list[str],
++    words: list[WordTiming],
++    *,
++    fallback_s: float = 2.0,
++) -> float:
++    """Return the first sentence's end time in seconds."""
++    groups = partition_words_by_sentences(sentences, words)
++    if not groups or not groups[0]:
++        return fallback_s
++    return groups[0][-1].end_ms / 1000.0
++
++
++def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
++    names = (
++        ("DejaVuSans-Bold.ttf", "arialbd.ttf")
++        if bold
++        else ("DejaVuSans.ttf", "arial.ttf")
++    )
++    for name in names:
++        try:
++            return ImageFont.truetype(name, size)
++        except OSError:
++            continue
++    return ImageFont.load_default()
++
++
++def _wrap_text(
++    text: str,
++    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
++    max_width: int,
++) -> list[str]:
++    draw = ImageDraw.Draw(Image.new("L", (1, 1)))
++    lines: list[str] = []
++    for paragraph in text.splitlines() or [""]:
++        words = paragraph.split()
++        if not words:
++            lines.append("")
++            continue
++        line = words[0]
++        for word in words[1:]:
++            candidate = f"{line} {word}"
++            if draw.textlength(candidate, font=font) <= max_width:
++                line = candidate
++            else:
++                lines.append(line)
++                line = word
++        lines.append(line)
++    return lines
++
++
++def _load_avatar(path: Path) -> Image.Image:
++    with Image.open(path) as source:
++        avatar = source.convert("RGBA").resize(
++            (_AVATAR_SIZE, _AVATAR_SIZE), Image.Resampling.LANCZOS
++        )
++    mask = Image.new("L", (_AVATAR_SIZE, _AVATAR_SIZE), 0)
++    ImageDraw.Draw(mask).ellipse((0, 0, _AVATAR_SIZE - 1, _AVATAR_SIZE - 1), fill=255)
++    avatar.putalpha(mask)
++    return avatar
++
++
++def render_reddit_card(
++    title: str,
++    output_path: Path | str,
++    *,
++    username: str = DEFAULT_REDDIT_USERNAME,
++    avatar_path: Path | str | None = None,
++) -> Path:
++    """Write a Reddit-style RGBA PNG and return its path."""
++    avatar_file = (
++        Path(avatar_path)
++        if avatar_path is not None
++        else Path(__file__).parent / "assets" / "reddit_avatar.png"
++    )
++    avatar = _load_avatar(avatar_file)
++
++    username_font = _font(19, bold=True)
++    meta_font = _font(18)
++    title_font = _font(34, bold=True)
++    lines = _wrap_text(title, title_font, CARD_WIDTH - 2 * _PADDING)
++    title_bbox = title_font.getbbox("Ag")
++    line_height = title_bbox[3] - title_bbox[1]
++    title_height = max(line_height, len(lines) * line_height + (len(lines) - 1) * _TITLE_SPACING)
++    card_height = (
++        _PADDING + _HEADER_HEIGHT + _TITLE_GAP + title_height + _BOTTOM_PADDING
++    )
++
++    image = Image.new("RGBA", (CARD_WIDTH, card_height), CARD_BG)
++    draw = ImageDraw.Draw(image)
++    image.alpha_composite(avatar, (_PADDING, _PADDING))
++
++    header_x = _PADDING + _AVATAR_SIZE + 12
++    header_y = _PADDING + 9
++    draw.text((header_x, header_y), username, font=username_font, fill="white")
++    username_width = draw.textlength(username, font=username_font)
++    draw.text(
++        (header_x + username_width + 10, header_y + 1),
++        "3d",
++        font=meta_font,
++        fill=(129, 131, 132, 255),
++    )
++
++    menu_x = CARD_WIDTH - _PADDING - 4
++    menu_y = _PADDING + _HEADER_HEIGHT // 2
++    for offset in (-7, 0, 7):
++        draw.ellipse(
++            (menu_x - 2, menu_y + offset - 2, menu_x + 2, menu_y + offset + 2),
++            fill=(215, 218, 220, 255),
++        )
++
++    title_y = _PADDING + _HEADER_HEIGHT + _TITLE_GAP
++    draw.multiline_text(
++        (_PADDING, title_y),
++        "\n".join(lines),
++        font=title_font,
++        fill="white",
++        spacing=_TITLE_SPACING,
++    )
++
++    out = Path(output_path)
++    out.parent.mkdir(parents=True, exist_ok=True)
++    image.save(out, format="PNG")
++    return out
+diff --git a/src/roblox_viral/render.py b/src/roblox_viral/render.py
+index dd2744d..11564e6 100644
+--- a/src/roblox_viral/render.py
++++ b/src/roblox_viral/render.py
+@@ -163,20 +163,22 @@ def _playback_setpts(video_speed: int) -> str | None:
+ def render_video(
+     *,
+     video_path: Path | str,
+     audio_path: Path | str,
+     ass_path: Path | str,
+     output_path: Path | str,
+     keep_temp: bool = False,
+     work_dir: Path | str | None = None,
+     overlay_path: Path | str | None = None,
+     video_speed: int = 100,
++    title_card_path: Path | str | None = None,
++    title_card_until_s: float | None = None,
+ ) -> Path:
+     """
+     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
+ 
+     When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
+     composite it centered (fit inside full frame) over captions at the start.
+ 
+     Original video audio is discarded by mapping only the TTS audio stream.
+     Intermediate files live under work_dir when provided; otherwise only final out is kept
+     unless keep_temp is True (work_dir is then left for the caller).
+@@ -194,29 +196,37 @@ def render_video(
+         raise RenderError(f"Audio not found: {audio}")
+     if not ass.is_file():
+         raise RenderError(f"Captions not found: {ass}")
+ 
+     overlay: Path | None = None
+     if overlay_path is not None:
+         overlay = Path(overlay_path)
+         if not overlay.is_file():
+             raise RenderError(f"Overlay video not found: {overlay}")
+ 
++    title_card: Path | None = None
++    if title_card_path is not None:
++        title_card = Path(title_card_path)
++        if not title_card.is_file():
++            raise RenderError(f"Title card not found: {title_card}")
++        if title_card_until_s is None or title_card_until_s <= 0:
++            raise RenderError("title_card_until_s must be greater than 0")
++
+     out.parent.mkdir(parents=True, exist_ok=True)
+     if work_dir is not None:
+         Path(work_dir).mkdir(parents=True, exist_ok=True)
+ 
+     audio_duration = probe_duration_seconds(audio)
+     ass_escaped = _ass_filter_path(ass)
+     setpts = _playback_setpts(video_speed)
+ 
+-    if overlay is None:
++    if overlay is None and title_card is None:
+         parts = [
+             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+         ]
+         if setpts:
+             parts.append(setpts)
+         parts.append(f"ass='{ass_escaped}'")
+         vf = ",".join(parts)
+         cmd = [
+             ffmpeg,
+@@ -243,21 +253,21 @@ def render_video(
+             "18",
+             "-c:a",
+             "aac",
+             "-b:a",
+             "192k",
+             "-shortest",
+             "-movflags",
+             "+faststart",
+             str(out),
+         ]
+-    else:
++    elif overlay is not None and title_card is None:
+         base_parts = [
+             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+         ]
+         if setpts:
+             base_parts.append(setpts)
+         base = ",".join(base_parts)
+         fc = (
+             f"[0:v]{base}[base];"
+             f"[base]ass='{ass_escaped}'[cap];"
+@@ -294,20 +304,85 @@ def render_video(
+             "18",
+             "-c:a",
+             "aac",
+             "-b:a",
+             "192k",
+             "-shortest",
+             "-movflags",
+             "+faststart",
+             str(out),
+         ]
++    else:
++        base_parts = [
++            f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
++            f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
++        ]
++        if setpts:
++            base_parts.append(setpts)
++        base = ",".join(base_parts)
++
++        inputs = [
++            ffmpeg,
++            "-y",
++            "-stream_loop",
++            "-1",
++            "-i",
++            str(video),
++            "-i",
++            str(audio),
++        ]
++        filter_parts = [f"[0:v]{base}[base]", f"[base]ass='{ass_escaped}'[cap]"]
++        title_input_index = 2
++        title_base = "[cap]"
++        if overlay is not None:
++            inputs.extend(["-t", f"{OVERLAY_DURATION_S}", "-i", str(overlay)])
++            filter_parts.extend(
++                [
++                    f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
++                    f"format=yuva420p,scale={OVERLAY_MAX_W}:{OVERLAY_MAX_H}:"
++                    "force_original_aspect_ratio=decrease[ov]",
++                    f"[cap][ov]overlay=(W-w)/2:(H-h)/2:"
++                    f"enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[with_overlay]",
++                ]
++            )
++            title_input_index = 3
++            title_base = "[with_overlay]"
++
++        inputs.extend(["-i", str(title_card)])
++        filter_parts.append(
++            f"{title_base}[{title_input_index}:v]"
++            f"overlay=(W-w)/2:(H/2-h):enable='lte(t,{title_card_until_s:.3f})'[outv]"
++        )
++        cmd = inputs + [
++            "-t",
++            f"{audio_duration:.3f}",
++            "-filter_complex",
++            ";".join(filter_parts),
++            "-map",
++            "[outv]",
++            "-map",
++            "1:a:0",
++            "-c:v",
++            "libx264",
++            "-preset",
++            "medium",
++            "-crf",
++            "18",
++            "-c:a",
++            "aac",
++            "-b:a",
++            "192k",
++            "-shortest",
++            "-movflags",
++            "+faststart",
++            str(out),
++        ]
+ 
+     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+     if result.returncode != 0:
+         raise RenderError(
+             "ffmpeg render failed:\n"
+             + (result.stderr[-2000:] if result.stderr else "no stderr")
+         )
+ 
+     return out
+ 
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index 0f2ecbf..76061a5 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -4,20 +4,21 @@ import json
+ import re
+ import threading
+ import uuid
+ from dataclasses import asdict, dataclass
+ from datetime import datetime, timezone
+ from typing import Literal
+ 
+ from pathlib import Path
+ 
+ from roblox_viral.captions import write_ass
++from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
+ from roblox_viral.reddit_clips import plan_reddit_clips
+ from roblox_viral.render import (
+     build_reddit_background,
+     probe_duration_seconds,
+     render_still,
+     render_video,
+ )
+ from roblox_viral.story import join_for_tts, split_sentences
+ from roblox_viral.voice import (
+     DEFAULT_PITCH,
+@@ -241,20 +242,27 @@ class JobManager:
+             self._set_status(settings, record, "synthesizing")
+             words = EdgeTTSProvider(
+                 record.voice,
+                 rate=format_edge_rate(record.speed),
+                 pitch=format_edge_pitch(record.pitch),
+             ).synthesize(join_for_tts(sentences), narration_path)
+ 
+             self._set_status(settings, record, "captioning")
+             write_ass(words, ass_path, sentences=sentences)
+ 
++            title_card_path: Path | None = None
++            title_card_until_s: float | None = None
++            if record.mode == "reddit":
++                title_card_until_s = first_sentence_end_s(sentences, words)
++                title_card_path = job_dir / "reddit_card.png"
++                render_reddit_card(sentences[0], title_card_path)
++
+             self._set_status(settings, record, "rendering")
+             if record.ephemeral:
+                 media_path = (job_dir / record.source_name).resolve()
+                 if (
+                     not media_path.is_relative_to(job_dir.resolve())
+                     or not media_path.is_file()
+                 ):
+                     raise FileNotFoundError(record.source_name)
+             elif record.mode == "picture":
+                 media_path = resolve_image(settings, record.source_name)
+@@ -282,27 +290,32 @@ class JobManager:
+             if record.mode == "picture":
+                 render_still(
+                     image_path=media_path,
+                     audio_path=narration_path,
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     ken_burns=record.ken_burns,
+                     work_dir=job_dir,
+                 )
+             else:
++                overlay_path = (
++                    None if record.mode == "reddit" else settings.overlay_video_path
++                )
+                 render_video(
+                     video_path=media_path,
+                     audio_path=narration_path,
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     work_dir=job_dir,
+-                    overlay_path=settings.overlay_video_path,
++                    overlay_path=overlay_path,
++                    title_card_path=title_card_path,
++                    title_card_until_s=title_card_until_s,
+                     video_speed=record.video_speed,
+                 )
+ 
+             record.output_name = output_name
+             self._set_status(settings, record, "done")
+         except Exception as exc:
+             record.error = str(exc)
+             self._set_status(settings, record, "error")
+         finally:
+             with self._lock:
+diff --git a/tests/test_reddit_card.py b/tests/test_reddit_card.py
+new file mode 100644
+index 0000000..bbff543
+--- /dev/null
++++ b/tests/test_reddit_card.py
+@@ -0,0 +1,34 @@
++"""Tests for Reddit title-card rendering and timing."""
++
++from PIL import Image
++
++from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
++from roblox_viral.voice import WordTiming
++
++
++def test_first_sentence_end_s():
++    sentences = ["Hello world.", "Second line."]
++    words = [
++        WordTiming("Hello", 0, 200),
++        WordTiming("world.", 200, 500),
++        WordTiming("Second", 500, 800),
++        WordTiming("line.", 800, 1000),
++    ]
++
++    assert abs(first_sentence_end_s(sentences, words) - 0.5) < 1e-6
++
++
++def test_first_sentence_end_s_fallback_empty_words():
++    assert first_sentence_end_s(["Hi."], []) == 2.0
++
++
++def test_render_reddit_card_writes_png(tmp_path):
++    out = tmp_path / "card.png"
++
++    path = render_reddit_card("Company copied my code after refusing to pay.", out)
++
++    assert path.is_file()
++    with Image.open(path) as image:
++        assert image.size[0] == 972
++        assert image.size[1] > 80
++        assert image.mode in ("RGBA", "RGB")
+diff --git a/tests/test_render.py b/tests/test_render.py
+index 62357f6..22b2c87 100644
+--- a/tests/test_render.py
++++ b/tests/test_render.py
+@@ -91,20 +91,102 @@ def test_render_video_with_overlay_uses_filter_complex(tmp_path, monkeypatch):
+     assert "eof_action=pass" in cmd
+     assert str(overlay) in seen["cmd"]
+     idx = seen["cmd"].index(str(overlay))
+     assert seen["cmd"][idx - 1] == "-i"
+     assert seen["cmd"][idx - 3 : idx - 1] in (["-t", "3.5"], ["-t", "3.500"])
+     assert "-map" in seen["cmd"]
+     assert "[outv]" in seen["cmd"]
+     assert "1:a:0" in seen["cmd"]
+ 
+ 
++def test_render_video_title_card_overlay_enable(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    card = _touch(tmp_path / "card.png")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        title_card_path=card,
++        title_card_until_s=1.25,
++        overlay_path=None,
++    )
++
++    cmd = seen["cmd"]
++    fc = cmd[cmd.index("-filter_complex") + 1]
++    assert "[0:v]scale=1080:1920:force_original_aspect_ratio=increase" in fc
++    assert "[base]ass=" in fc
++    assert "[cap][2:v]overlay=(W-w)/2:(H/2-h):enable='lte(t,1.250)'[outv]" in fc
++    assert cmd[cmd.index(str(card)) - 1] == "-i"
++    assert cmd.index(str(card)) > cmd.index(str(audio))
++    assert cmd[cmd.index("-map") + 1] == "[outv]"
++    assert "1:a:0" in cmd
++
++
++@pytest.mark.parametrize("until_s", [None, 0, -0.1])
++def test_render_video_title_card_requires_positive_duration(
++    tmp_path, monkeypatch, until_s
++):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    card = _touch(tmp_path / "card.png")
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    with pytest.raises(RenderError, match="title_card_until_s"):
++        render_video(
++            video_path=video,
++            audio_path=audio,
++            ass_path=ass,
++            output_path=tmp_path / "out.mp4",
++            title_card_path=card,
++            title_card_until_s=until_s,
++        )
++
++
++def test_render_video_missing_title_card_path_raises(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    with pytest.raises(RenderError, match="Title card"):
++        render_video(
++            video_path=video,
++            audio_path=audio,
++            ass_path=ass,
++            output_path=tmp_path / "out.mp4",
++            title_card_path=tmp_path / "missing.png",
++            title_card_until_s=1,
++        )
++
++
+ def test_render_video_missing_overlay_path_raises(tmp_path, monkeypatch):
+     video = _touch(tmp_path / "game.mp4")
+     audio = _touch(tmp_path / "n.mp3")
+     ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+     out = tmp_path / "out.mp4"
+     monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 1.0)
+     monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+     with pytest.raises(RenderError, match="Overlay"):
+         render_video(
+             video_path=video,
+diff --git a/tests/web/test_jobs.py b/tests/web/test_jobs.py
+index 2ad4573..7a61833 100644
+--- a/tests/web/test_jobs.py
++++ b/tests/web/test_jobs.py
+@@ -532,13 +532,113 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
+     job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
+     mgr.run_job(s, job.id)
+ 
+     reddit_bg = s.jobs_dir / job.id / "reddit_bg.mp4"
+     paths, target_seconds, durations = seen["plan"]
+     assert paths == videos
+     assert target_seconds == 12.0
+     assert durations == {videos[0]: 8.0, videos[1]: 8.0}
+     assert seen["build"] == (["planned-segment"], reddit_bg, s.jobs_dir / job.id)
+     assert seen["render"]["video_path"] == reddit_bg
+-    assert seen["render"]["overlay_path"] == s.overlay_video_path
++    assert seen["render"]["overlay_path"] is None
++    assert str(seen["render"]["title_card_path"]).endswith("reddit_card.png")
++    assert seen["render"]["title_card_until_s"] > 0
+     assert seen["render"]["video_speed"] == job.video_speed
+     assert mgr.get(job.id, s).status == "done"
++
++
++def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    (s.videos_dir / "one.mp4").write_bytes(b"vid")
++    mgr = JobManager()
++    seen = {}
++
++    def fake_synthesize(self, text, output_path):
++        Path(output_path).write_bytes(b"mp3")
++        return [WordTiming("One", 0, 500)]
++
++    def fake_write_ass(words, ass_path, sentences=None):
++        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
++
++    def fake_probe(path):
++        return 12.0 if Path(path).name == "narration.mp3" else 8.0
++
++    def fake_plan(paths, target_seconds, *, durations):
++        return ["planned-segment"]
++
++    def fake_build(segments, output_path, *, work_dir=None):
++        Path(output_path).write_bytes(b"background")
++
++    def fake_render_reddit_card(title, output_path):
++        seen["card"] = (title, Path(output_path))
++        Path(output_path).write_bytes(b"png")
++
++    def fake_first_sentence_end_s(sentences, words):
++        seen["timing"] = (sentences, words)
++        return 0.5
++
++    def fake_render_video(**kwargs):
++        seen["render"] = kwargs
++        Path(kwargs["output_path"]).write_bytes(b"mp4")
++
++    monkeypatch.setattr(
++        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
++    monkeypatch.setattr(jobs_module, "probe_duration_seconds", fake_probe, raising=False)
++    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
++    monkeypatch.setattr(
++        jobs_module, "build_reddit_background", fake_build, raising=False
++    )
++    monkeypatch.setattr(
++        jobs_module, "render_reddit_card", fake_render_reddit_card, raising=False
++    )
++    monkeypatch.setattr(
++        jobs_module, "first_sentence_end_s", fake_first_sentence_end_s, raising=False
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
++
++    story = "First sentence here.\nSecond line.\n"
++    job = mgr.create(s, "", story, "en-US-EmmaNeural", mode="reddit")
++    mgr.run_job(s, job.id)
++
++    assert seen["card"][0] == "First sentence here."
++    assert seen["card"][1] == s.jobs_dir / job.id / "reddit_card.png"
++    assert seen["render"]["overlay_path"] is None
++    assert str(seen["render"]["title_card_path"]).endswith("reddit_card.png")
++    assert seen["render"]["title_card_until_s"] == 0.5
++    assert mgr.get(job.id, s).status == "done"
++
++
++def test_run_single_still_uses_greenscreen(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    seen = {}
++
++    def fake_synthesize(self, text, output_path):
++        Path(output_path).write_bytes(b"mp3")
++        return [WordTiming("One", 0, 100)]
++
++    def fake_write_ass(words, ass_path, sentences=None):
++        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
++
++    def fake_render_video(**kwargs):
++        seen.update(kwargs)
++        Path(kwargs["output_path"]).write_bytes(b"mp4")
++
++    def boom_card(*args, **kwargs):
++        raise AssertionError("render_reddit_card should not run for single jobs")
++
++    monkeypatch.setattr(
++        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
++    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
++    monkeypatch.setattr(jobs_module, "render_reddit_card", boom_card, raising=False)
++
++    job = mgr.create(s, "clip.mp4", "One line only here.\n", "en-US-EmmaNeural")
++    mgr.run_job(s, job.id)
++
++    assert seen["overlay_path"] == s.overlay_video_path
++    assert seen.get("title_card_path") is None
++    assert seen.get("title_card_until_s") is None
++    assert mgr.get(job.id, s).status == "done"

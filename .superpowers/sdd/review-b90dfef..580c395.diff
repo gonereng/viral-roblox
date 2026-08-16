@@ -1,0 +1,200 @@
+# Review package: b90dfef9257d5b9abfe0fa5a63a386d4ef1abcfb..580c395e4b338a447a71bcd6c03af67ea8ec149d
+
+## Commits
+580c395 feat(web): serve authenticated library media for preview
+
+## Files changed
+ src/roblox_viral/web/app.py      | 55 ++++++++++++++++++++++++++++++++++++++++
+ src/roblox_viral/web/library.py  | 15 +++++++++++
+ tests/web/test_library_routes.py | 35 +++++++++++++++++++++++++
+ 3 files changed, 105 insertions(+)
+
+## Diff
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index 391d240..cd88069 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -37,20 +37,24 @@ from roblox_viral.web.gemini import generate_story
+ from roblox_viral.web.jobs import BusyError, JobManager, normalize_mode
+ from roblox_viral.web import library as library_mod
+ from roblox_viral.web.library import (
+     delete_image,
+     delete_source,
+     delete_video,
+     list_images,
+     list_outputs,
+     list_sources,
+     list_videos,
++    media_type_for_name,
++    resolve_image,
++    resolve_source,
++    resolve_video,
+     save_image,
+     save_upload,
+     save_video,
+ )
+ from roblox_viral.web.prompt import load_prompt, save_prompt
+ from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
+ 
+ WEB_DIR = Path(__file__).resolve().parent
+ TEMPLATES_DIR = WEB_DIR / "templates"
+ STATIC_DIR = WEB_DIR / "static"
+@@ -501,17 +505,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+         safe = Path(name).name
+         if safe != name or not safe:
+             raise HTTPException(status_code=400, detail="Invalid filename")
+         path = (settings.outputs_dir / safe).resolve()
+         if not path.is_relative_to(settings.outputs_dir.resolve()):
+             raise HTTPException(status_code=400, detail="Invalid path")
+         if not path.is_file():
+             raise HTTPException(status_code=404, detail="Not found")
+         return FileResponse(path, media_type="video/mp4", filename=safe)
+ 
++    def _library_media_response(resolve, settings: Settings, name: str) -> FileResponse:
++        try:
++            path = resolve(settings, name)
++        except ValueError as exc:
++            raise HTTPException(status_code=400, detail=str(exc)) from exc
++        except FileNotFoundError:
++            raise HTTPException(status_code=404, detail="Not found")
++        return FileResponse(
++            path,
++            media_type=media_type_for_name(path.name),
++            filename=path.name,
++        )
++
++    @app.get("/media/sources/{name}")
++    def media_source(
++        name: str,
++        request: Request,
++        _: None = Depends(require_login),
++    ) -> FileResponse:
++        return _library_media_response(
++            resolve_source, request.app.state.settings, name
++        )
++
++    @app.get("/media/videos/{name}")
++    def media_video(
++        name: str,
++        request: Request,
++        _: None = Depends(require_login),
++    ) -> FileResponse:
++        return _library_media_response(
++            resolve_video, request.app.state.settings, name
++        )
++
++    @app.get("/media/images/{name}")
++    def media_image(
++        name: str,
++        request: Request,
++        _: None = Depends(require_login),
++    ) -> FileResponse:
++        return _library_media_response(
++            resolve_image, request.app.state.settings, name
++        )
++
++    @app.get("/media/{name}")
++    def media_invalid_direct(
++        name: str,
++        request: Request,
++        _: None = Depends(require_login),
++    ) -> FileResponse:
++        raise HTTPException(status_code=400, detail="Invalid path")
++
+     return app
+ 
+ 
+ def main() -> None:
+     import uvicorn
+ 
+     uvicorn.run(create_app, factory=True, host="0.0.0.0", port=8000, reload=False)
+diff --git a/src/roblox_viral/web/library.py b/src/roblox_viral/web/library.py
+index 0493c8f..18bf258 100644
+--- a/src/roblox_viral/web/library.py
++++ b/src/roblox_viral/web/library.py
+@@ -9,20 +9,35 @@ from pathlib import Path
+ 
+ from roblox_viral.render import RenderError, probe_duration_seconds, require_ffmpeg
+ from roblox_viral.web.config import Settings
+ 
+ _SAFE_NAME = re.compile(r"^[A-Za-z0-9._ ()-]+\.(mp4|mov|webm|mkv)$", re.I)
+ _SAFE_IMAGE_NAME = re.compile(r"^[A-Za-z0-9._ -]+\.(jpg|jpeg|png|webp)$", re.I)
+ MAX_UPLOAD_BYTES = 500_000_000
+ MAX_IMAGE_UPLOAD_BYTES = 20_000_000
+ SLICE_SECONDS = 60
+ 
++_MEDIA_TYPES = {
++    ".mp4": "video/mp4",
++    ".mov": "video/quicktime",
++    ".webm": "video/webm",
++    ".mkv": "video/x-matroska",
++    ".jpg": "image/jpeg",
++    ".jpeg": "image/jpeg",
++    ".png": "image/png",
++    ".webp": "image/webp",
++}
++
++
++def media_type_for_name(name: str) -> str:
++    return _MEDIA_TYPES.get(Path(name).suffix.lower(), "application/octet-stream")
++
+ 
+ @dataclass(frozen=True)
+ class SourceVideo:
+     name: str
+     path: Path
+     size_bytes: int
+ 
+ 
+ @dataclass(frozen=True)
+ class SourceImage:
+diff --git a/tests/web/test_library_routes.py b/tests/web/test_library_routes.py
+index aab5dc2..664687b 100644
+--- a/tests/web/test_library_routes.py
++++ b/tests/web/test_library_routes.py
+@@ -87,10 +87,45 @@ def test_library_page_has_three_tabs_and_media_lists(tmp_path, monkeypatch):
+ 
+     assert response.status_code == 200
+     assert "YouTube" not in response.text
+     assert "1-minute clips" in response.text
+     assert "Videos" in response.text
+     assert "Images" in response.text
+     assert "slice-1.mp4" in response.text
+     assert "video.mp4" in response.text
+     assert "image.jpg" in response.text
+     assert 'src="/static/library.js"' in response.text
++
++
++def test_media_library_routes_require_auth_and_serve(tmp_path, monkeypatch):
++    client = _client(tmp_path, monkeypatch)
++    settings = client.app.state.settings
++    settings.sources_dir.mkdir(parents=True, exist_ok=True)
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    settings.images_dir.mkdir(parents=True, exist_ok=True)
++    (settings.sources_dir / "slice.mp4").write_bytes(b"slice-bytes")
++    (settings.videos_dir / "raw.mp4").write_bytes(b"raw-bytes")
++    (settings.images_dir / "pic.png").write_bytes(b"png-bytes")
++
++    for url in (
++        "/media/sources/slice.mp4",
++        "/media/videos/raw.mp4",
++        "/media/images/pic.png",
++    ):
++        unauth = client.get(url, follow_redirects=False)
++        assert unauth.status_code in (302, 303, 401)
++
++    _login(client)
++    assert client.get("/media/sources/slice.mp4").content == b"slice-bytes"
++    assert client.get("/media/videos/raw.mp4").content == b"raw-bytes"
++    img = client.get("/media/images/pic.png")
++    assert img.status_code == 200
++    assert img.content == b"png-bytes"
++    assert "image/png" in img.headers.get("content-type", "")
++
++
++def test_media_library_routes_404_and_400(tmp_path, monkeypatch):
++    client = _client(tmp_path, monkeypatch)
++    _login(client)
++    assert client.get("/media/videos/missing.mp4").status_code == 404
++    assert client.get("/media/sources/../secrets.mp4").status_code == 400
++    assert client.get("/media/images/not-a-path.jpg").status_code == 404

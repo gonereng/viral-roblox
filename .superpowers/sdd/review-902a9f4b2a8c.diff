@@ -1,0 +1,134 @@
+=== COMMITS ===
+b1e15b4 feat: scale greenscreen overlay to fit full frame (2x)
+
+=== STAT ===
+ src/roblox_viral/render.py |  7 ++++---
+ tests/test_render.py       | 36 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 40 insertions(+), 3 deletions(-)
+
+=== DIFF ===
+diff --git a/src/roblox_viral/render.py b/src/roblox_viral/render.py
+index 4b02e5e..a57024a 100644
+--- a/src/roblox_viral/render.py
++++ b/src/roblox_viral/render.py
+@@ -6,21 +6,22 @@ import json
+ import shutil
+ import subprocess
+ from pathlib import Path
+ 
+ from roblox_viral.voice import validate_video_speed
+ 
+ 
+ OUTPUT_WIDTH = 1080
+ OUTPUT_HEIGHT = 1920
+ OVERLAY_DURATION_S = 3.5
+-OVERLAY_HEIGHT = OUTPUT_HEIGHT // 2
++OVERLAY_MAX_W = OUTPUT_WIDTH
++OVERLAY_MAX_H = OUTPUT_HEIGHT
+ OVERLAY_CHROMA_COLOR = "0x00FE00"
+ OVERLAY_CHROMA_SIMILARITY = "0.30"
+ OVERLAY_CHROMA_BLEND = "0.10"
+ 
+ KEN_BURNS_ZOOM = 1.20
+ KEN_BURNS_FPS = 30
+ 
+ 
+ class RenderError(RuntimeError):
+     """Raised when ffmpeg/ffprobe fails or is missing."""
+@@ -92,21 +93,21 @@ def render_video(
+     output_path: Path | str,
+     keep_temp: bool = False,
+     work_dir: Path | str | None = None,
+     overlay_path: Path | str | None = None,
+     video_speed: int = 100,
+ ) -> Path:
+     """
+     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
+ 
+     When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
+-    composite it centered (half frame height) over captions at the start.
++    composite it centered (fit inside full frame) over captions at the start.
+ 
+     Original video audio is discarded by mapping only the TTS audio stream.
+     Intermediate files live under work_dir when provided; otherwise only final out is kept
+     unless keep_temp is True (work_dir is then left for the caller).
+     """
+     del keep_temp  # reserved for CLI temp-dir lifecycle; render itself writes only `out`
+     ffmpeg = require_ffmpeg()
+     video = Path(video_path)
+     audio = Path(audio_path)
+     ass = Path(ass_path)
+@@ -179,21 +180,21 @@ def render_video(
+             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+         ]
+         if setpts:
+             base_parts.append(setpts)
+         base = ",".join(base_parts)
+         fc = (
+             f"[0:v]{base}[base];"
+             f"[base]ass='{ass_escaped}'[cap];"
+             f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
+-            f"format=yuva420p,scale=-2:{OVERLAY_HEIGHT}[ov];"
++            f"format=yuva420p,scale={OVERLAY_MAX_W}:{OVERLAY_MAX_H}:force_original_aspect_ratio=decrease[ov];"
+             f"[cap][ov]overlay=(W-w)/2:(H-h)/2:enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[outv]"
+         )
+         cmd = [
+             ffmpeg,
+             "-y",
+             "-stream_loop",
+             "-1",
+             "-i",
+             str(video),
+             "-i",
+diff --git a/tests/test_render.py b/tests/test_render.py
+index 6c4e825..1e0055a 100644
+--- a/tests/test_render.py
++++ b/tests/test_render.py
+@@ -300,10 +300,46 @@ def test_render_video_overlay_includes_setpts_on_base(tmp_path, monkeypatch):
+         video_path=video,
+         audio_path=audio,
+         ass_path=ass,
+         output_path=out,
+         overlay_path=overlay,
+         video_speed=150,
+     )
+     fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+     assert "setpts=100/150*PTS" in fc
+     assert "lte(t,3.5)" in fc
++
++
++def test_render_video_overlay_fits_full_frame(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    overlay = _touch(tmp_path / "overlay.mp4")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        overlay_path=overlay,
++    )
++    fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
++    assert f"scale=1080:1920:force_original_aspect_ratio=decrease" in fc
++    assert "scale=-2:" not in fc
++    assert "lte(t,3.5)" in fc

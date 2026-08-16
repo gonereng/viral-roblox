@@ -1,0 +1,236 @@
+=== COMMITS ===
+b6c0b07 feat: build concat background from reddit clip segments
+
+=== STAT ===
+ src/roblox_viral/render.py | 67 +++++++++++++++++++++++++++++++++++++
+ tests/test_render.py       | 83 +++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 149 insertions(+), 1 deletion(-)
+
+=== DIFF ===
+diff --git a/src/roblox_viral/render.py b/src/roblox_viral/render.py
+index a57024a..5afa43a 100644
+--- a/src/roblox_viral/render.py
++++ b/src/roblox_viral/render.py
+@@ -1,21 +1,25 @@
+ """ffmpeg-based video render: loop, crop to 9:16, burn captions, mux TTS."""
+ 
+ from __future__ import annotations
+ 
+ import json
+ import shutil
+ import subprocess
+ from pathlib import Path
++from typing import TYPE_CHECKING
+ 
+ from roblox_viral.voice import validate_video_speed
+ 
++if TYPE_CHECKING:
++    from roblox_viral.reddit_clips import ClipSegment
++
+ 
+ OUTPUT_WIDTH = 1080
+ OUTPUT_HEIGHT = 1920
+ OVERLAY_DURATION_S = 3.5
+ OVERLAY_MAX_W = OUTPUT_WIDTH
+ OVERLAY_MAX_H = OUTPUT_HEIGHT
+ OVERLAY_CHROMA_COLOR = "0x00FE00"
+ OVERLAY_CHROMA_SIMILARITY = "0.30"
+ OVERLAY_CHROMA_BLEND = "0.10"
+ 
+@@ -64,20 +68,83 @@ def probe_duration_seconds(media_path: Path | str) -> float:
+     except subprocess.CalledProcessError as exc:
+         raise RenderError(f"ffprobe failed for {media_path}: {exc.stderr}") from exc
+ 
+     data = json.loads(result.stdout or "{}")
+     duration = float(data.get("format", {}).get("duration", 0) or 0)
+     if duration <= 0:
+         raise RenderError(f"Could not determine duration for {media_path}")
+     return duration
+ 
+ 
++def build_reddit_background(
++    segments: list[ClipSegment],
++    output_path: Path,
++    *,
++    work_dir: Path | None = None,
++) -> Path:
++    """Trim and concatenate reddit clip segments into a silent video."""
++    if not segments:
++        raise RenderError("Cannot build reddit background without clip segments")
++
++    ffmpeg = require_ffmpeg()
++    out = Path(output_path)
++    out.parent.mkdir(parents=True, exist_ok=True)
++    if work_dir is not None:
++        Path(work_dir).mkdir(parents=True, exist_ok=True)
++
++    cmd = [ffmpeg, "-y"]
++    filter_parts = []
++    concat_inputs = []
++    for index, segment in enumerate(segments):
++        cmd.extend(
++            [
++                "-ss",
++                f"{segment.start_s:.3f}",
++                "-t",
++                f"{segment.duration_s:.3f}",
++                "-i",
++                str(segment.path),
++            ]
++        )
++        label = f"v{index}"
++        filter_parts.append(f"[{index}:v]setpts=PTS-STARTPTS[{label}]")
++        concat_inputs.append(f"[{label}]")
++
++    filter_parts.append(
++        "".join(concat_inputs) + f"concat=n={len(segments)}:v=1:a=0[outv]"
++    )
++    cmd.extend(
++        [
++            "-filter_complex",
++            ";".join(filter_parts),
++            "-map",
++            "[outv]",
++            "-c:v",
++            "libx264",
++            "-pix_fmt",
++            "yuv420p",
++            "-an",
++            "-movflags",
++            "+faststart",
++            str(out),
++        ]
++    )
++
++    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
++    if result.returncode != 0:
++        raise RenderError(
++            "ffmpeg reddit background concat failed:\n"
++            + (result.stderr[-2000:] if result.stderr else "no stderr")
++        )
++    return out
++
++
+ def _ass_filter_path(ass_path: Path) -> str:
+     """Escape path for ffmpeg ass filter (Windows-safe)."""
+     p = ass_path.resolve().as_posix()
+     p = p.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+     return p
+ 
+ 
+ def _playback_setpts(video_speed: int) -> str | None:
+     validate_video_speed(video_speed)
+     if video_speed == 100:
+diff --git a/tests/test_render.py b/tests/test_render.py
+index 1e0055a..2e3bb19 100644
+--- a/tests/test_render.py
++++ b/tests/test_render.py
+@@ -1,15 +1,21 @@
+ from pathlib import Path
+ 
+ import pytest
+ 
+-from roblox_viral.render import RenderError, render_still, render_video
++from roblox_viral.reddit_clips import ClipSegment
++from roblox_viral.render import (
++    RenderError,
++    build_reddit_background,
++    render_still,
++    render_video,
++)
+ 
+ 
+ def _touch(path: Path, data: bytes = b"x") -> Path:
+     path.parent.mkdir(parents=True, exist_ok=True)
+     path.write_bytes(data)
+     return path
+ 
+ 
+ def test_render_video_without_overlay_uses_vf(tmp_path, monkeypatch):
+     video = _touch(tmp_path / "game.mp4")
+@@ -336,10 +342,85 @@ def test_render_video_overlay_fits_full_frame(tmp_path, monkeypatch):
+         video_path=video,
+         audio_path=audio,
+         ass_path=ass,
+         output_path=out,
+         overlay_path=overlay,
+     )
+     fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+     assert f"scale=1080:1920:force_original_aspect_ratio=decrease" in fc
+     assert "scale=-2:" not in fc
+     assert "lte(t,3.5)" in fc
++
++
++def test_build_reddit_background_concats_trimmed_segments(tmp_path, monkeypatch):
++    first = _touch(tmp_path / "first.mp4")
++    second = _touch(tmp_path / "second.mp4")
++    out = tmp_path / "nested" / "background.mp4"
++    work_dir = tmp_path / "work"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++
++    result = build_reddit_background(
++        [
++            ClipSegment(path=first, start_s=1.25, duration_s=2.5),
++            ClipSegment(path=second, start_s=0.0, duration_s=3.75),
++        ],
++        out,
++        work_dir=work_dir,
++    )
++
++    assert result == out
++    assert out.is_file()
++    assert work_dir.is_dir()
++    cmd = seen["cmd"]
++    assert cmd.count("-i") == 2
++    assert str(first) in cmd
++    assert str(second) in cmd
++    assert cmd[cmd.index(str(first)) - 5 : cmd.index(str(first))] == [
++        "-ss",
++        "1.250",
++        "-t",
++        "2.500",
++        "-i",
++    ]
++    filter_complex = cmd[cmd.index("-filter_complex") + 1]
++    assert "[0:v]setpts=PTS-STARTPTS[v0]" in filter_complex
++    assert "[1:v]setpts=PTS-STARTPTS[v1]" in filter_complex
++    assert "[v0][v1]concat=n=2:v=1:a=0[outv]" in filter_complex
++    assert cmd[cmd.index("-map") + 1] == "[outv]"
++    assert cmd[cmd.index("-c:v") + 1] == "libx264"
++    assert "-an" in cmd
++
++
++def test_build_reddit_background_raises_render_error_on_ffmpeg_failure(
++    tmp_path, monkeypatch
++):
++    source = _touch(tmp_path / "source.mp4")
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        class R:
++            returncode = 1
++            stderr = "concat exploded"
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++
++    with pytest.raises(RenderError, match="concat exploded"):
++        build_reddit_background(
++            [ClipSegment(path=source, start_s=0.0, duration_s=1.0)],
++            tmp_path / "out.mp4",
++        )

@@ -1,0 +1,69 @@
+=== COMMITS ===
+d615319 docs: document library tabs and video_speed
+
+=== STAT ===
+ README.md | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+=== DIFF ===
+diff --git a/README.md b/README.md
+index dea678b..577f384 100644
+--- a/README.md
++++ b/README.md
+@@ -41,23 +41,31 @@ Options:
+ 
+ ## Pipeline
+ 
+ 1. Normalize story text
+ 2. Synthesize narration with **Edge TTS** (word-boundary timings)
+ 3. Build **ASS** karaoke captions (yellow active word)
+ 4. **ffmpeg**: mute + loop video to audio length, center-crop to 9:16, burn captions, mux TTS
+ 
+ ## Web app
+ 
+-Browser UI to upload gameplay clips on **Library** (split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
++Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story prompt), and **Generate** page to pick sources, write a story, choose voice settings, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+ 
+-On **Generate**, switch **Roblox** (gameplay clip from Library) or **Picture** (upload a still on that tab: jpg/png/webp). Picture videos use the same story, voice, pitch, and speed; optional **Ken Burns** slowly zooms in. The greenscreen overlay applies to Roblox videos only.
++**Library** has three tabs:
++
++| Tab | Behavior |
++|-----|----------|
++| **1-minute clips** | Upload gameplay; split into complete one-minute slices (`media/sources/`) |
++| **Videos** | Upload full clips as-is, no slicing (`media/videos/`) |
++| **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
++
++On **Generate**, switch **Roblox** (pick a labeled clip from Library — `(1m)` slices or `(video)` raw) or **Picture** (pick an image from Library). Roblox mode adds a **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Picture videos support optional **Ken Burns** slow zoom. The greenscreen overlay applies to Roblox videos only.
+ 
+ ### Local run
+ 
+ ```bash
+ # Windows
+ set APP_PASSWORD=your-password
+ set APP_SECRET=your-long-random-secret
+ 
+ # macOS / Linux
+ export APP_PASSWORD=your-password
+@@ -66,21 +74,21 @@ export APP_SECRET=your-long-random-secret
+ pip install -e .
+ roblox-viral-web
+ ```
+ 
+ Or with auto-reload:
+ 
+ ```bash
+ uvicorn roblox_viral.web.app:create_app --factory --reload
+ ```
+ 
+-Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload a source in **Library**, then use **Generate**.
++Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload media in **Library**, then use **Generate**.
+ 
+ Optional env vars:
+ 
+ | Variable | Description |
+ |----------|-------------|
+ | `MEDIA_ROOT` | Upload/output directory (default: `./media`) |
+ | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
+ | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
+ | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
+ | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |

@@ -1,0 +1,112 @@
+=== COMMITS ===
+36d0d66 feat: add reddit clip planner (shuffle, reshuffle, trim)
+
+=== STAT ===
+ src/roblox_viral/reddit_clips.py | 62 ++++++++++++++++++++++++++++++++++++++++
+ tests/test_reddit_clips.py       | 29 +++++++++++++++++++
+ 2 files changed, 91 insertions(+)
+
+=== DIFF ===
+diff --git a/src/roblox_viral/reddit_clips.py b/src/roblox_viral/reddit_clips.py
+new file mode 100644
+index 0000000..2769628
+--- /dev/null
++++ b/src/roblox_viral/reddit_clips.py
+@@ -0,0 +1,62 @@
++"""Plan reddit background clips by shuffling source videos."""
++
++from __future__ import annotations
++
++import random
++from dataclasses import dataclass
++from pathlib import Path
++
++from roblox_viral.render import probe_duration_seconds
++
++_EPSILON = 1e-6
++
++
++@dataclass(frozen=True)
++class ClipSegment:
++    path: Path
++    start_s: float  # always 0 for v1
++    duration_s: float
++
++
++def _duration_for(path: Path, durations: dict[Path, float] | None) -> float:
++    if durations is not None:
++        return durations[path]
++    return probe_duration_seconds(path)
++
++
++def plan_reddit_clips(
++    paths: list[Path],
++    target_seconds: float,
++    *,
++    durations: dict[Path, float] | None = None,
++    rng: random.Random | None = None,
++) -> list[ClipSegment]:
++    """
++    Shuffle without replacement; reshuffle when exhausted; trim last segment.
++
++    durations: optional map path→seconds (tests inject; production uses probe).
++    Raise ValueError if paths empty or target_seconds <= 0.
++    """
++    if not paths or target_seconds <= 0:
++        raise ValueError("paths must be non-empty and target_seconds must be positive")
++
++    rng = rng or random.Random()
++    remaining = target_seconds
++    out: list[ClipSegment] = []
++    bag: list[Path] = []
++
++    while remaining > _EPSILON:
++        if not bag:
++            bag = list(paths)
++            rng.shuffle(bag)
++
++        path = bag.pop()
++        duration = _duration_for(path, durations)
++        if duration <= 0:
++            raise ValueError(f"duration must be positive for {path}")
++
++        use = min(duration, remaining)
++        out.append(ClipSegment(path=path, start_s=0.0, duration_s=use))
++        remaining -= use
++
++    return out
+diff --git a/tests/test_reddit_clips.py b/tests/test_reddit_clips.py
+new file mode 100644
+index 0000000..df1ad76
+--- /dev/null
++++ b/tests/test_reddit_clips.py
+@@ -0,0 +1,29 @@
++"""Tests for reddit clip planning."""
++
++import random
++from pathlib import Path
++
++import pytest
++
++from roblox_viral.reddit_clips import plan_reddit_clips
++
++
++def test_plan_trims_last_clip():
++    paths = [Path("a.mp4"), Path("b.mp4")]
++    durs = {paths[0]: 10.0, paths[1]: 10.0}
++    rng = random.Random(0)
++    segs = plan_reddit_clips(paths, 15.0, durations=durs, rng=rng)
++    assert abs(sum(s.duration_s for s in segs) - 15.0) < 1e-6
++    assert segs[-1].duration_s < 10.0 or len(segs) == 2
++
++
++def test_plan_reshuffles_when_exhausted():
++    p = Path("only.mp4")
++    segs = plan_reddit_clips([p], 25.0, durations={p: 10.0}, rng=random.Random(1))
++    assert len(segs) == 3
++    assert abs(sum(s.duration_s for s in segs) - 25.0) < 1e-6
++
++
++def test_plan_empty_pool_errors():
++    with pytest.raises(ValueError):
++        plan_reddit_clips([], 10.0, durations={})

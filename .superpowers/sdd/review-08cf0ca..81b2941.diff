@@ -1,0 +1,197 @@
+# Review package: 08cf0ca43828ec856569ccf1618cbe84278dd083..81b2941f8ea3f1c1848b16458523742eca1846a7
+
+## Commits
+81b2941 feat(web): inline library video and image previews
+
+## Files changed
+ README.md                                   |  2 ++
+ src/roblox_viral/web/static/app.css         | 16 ++++++++++++++++
+ src/roblox_viral/web/templates/library.html | 12 ++++++++++++
+ tests/web/test_library_routes.py            | 22 ++++++++++++++++++++++
+ 4 files changed, 52 insertions(+)
+
+## Diff
+diff --git a/README.md b/README.md
+index 3eaf4d2..8a24d8a 100644
+--- a/README.md
++++ b/README.md
+@@ -51,20 +51,22 @@ Options:
+ Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story prompt), and **Generate** page to pick sources, write a story, choose voice settings, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+ 
+ **Library** has three tabs:
+ 
+ | Tab | Behavior |
+ |-----|----------|
+ | **1-minute clips** | Upload gameplay; split into complete one-minute slices (`media/sources/`) |
+ | **Videos** | Upload full clips as-is, no slicing (`media/videos/`) |
+ | **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
+ 
++Library lists include inline preview (video controls with no preload; lazy images).
++
+ On **Generate**, pick a background mode via three tabs:
+ 
+ | Tab | Behavior |
+ |-----|----------|
+ | **Single background video** | Pick a one-minute clip from Library â†’ 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50â€“200%, default 100%) independent of voice pitch/speed. Greenscreen overlay at start. |
+ | **Picture** | Pick an image from Library â†’ Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
+ | **Reddit** | No source picker â€” auto-concat random clips from Library â†’ Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Requires at least one video in the Videos pool. |
+ 
+ **Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The subscribe greenscreen overlay is not used for Reddit yet.
+ 
+diff --git a/src/roblox_viral/web/static/app.css b/src/roblox_viral/web/static/app.css
+index 3a2af8b..10db35f 100644
+--- a/src/roblox_viral/web/static/app.css
++++ b/src/roblox_viral/web/static/app.css
+@@ -209,20 +209,36 @@ button:disabled {
+ .inline-form {
+   margin-left: auto;
+ }
+ 
+ .inline-form button {
+   background: transparent;
+   color: var(--error);
+   border: 1px solid var(--line);
+ }
+ 
++.source-preview {
++  flex: 1 1 100%;
++  max-width: 100%;
++}
++
++.source-preview video,
++.source-preview img {
++  display: block;
++  max-width: 100%;
++  max-height: 240px;
++  width: auto;
++  height: auto;
++  object-fit: contain;
++  background: var(--surface);
++}
++
+ #player {
+   width: 100%;
+   max-height: 70vh;
+   background: #111;
+   border-radius: 0.4rem;
+ }
+ 
+ .slider-field input[type="range"] {
+   width: 100%;
+   display: block;
+diff --git a/src/roblox_viral/web/templates/library.html b/src/roblox_viral/web/templates/library.html
+index 33f3a2c..cef93b6 100644
+--- a/src/roblox_viral/web/templates/library.html
++++ b/src/roblox_viral/web/templates/library.html
+@@ -50,20 +50,24 @@
+     {% if sources %}
+     <ul class="source-list">
+       {% for source in sources %}
+       <li>
+         <span>{{ source.name }}</span>
+         <span class="meta">{{ source.size_bytes }} bytes</span>
+         <form method="post" action="/library/delete" class="inline-form">
+           <input type="hidden" name="name" value="{{ source.name }}">
+           <button type="submit">Delete <span class="visually-hidden">{{ source.name }}</span></button>
+         </form>
++        <div class="source-preview">
++          <video controls playsinline preload="none"
++                 src="/media/sources/{{ source.name }}"></video>
++        </div>
+       </li>
+       {% endfor %}
+     </ul>
+     {% else %}
+     <p>No 1-minute clips yet.</p>
+     {% endif %}
+   </section>
+ 
+   <section id="panel-videos" role="tabpanel" aria-labelledby="tab-videos"
+            {% if tab != "videos" %}hidden{% endif %}>
+@@ -80,20 +84,24 @@
+     {% if videos %}
+     <ul class="source-list">
+       {% for video in videos %}
+       <li>
+         <span>{{ video.name }}</span>
+         <span class="meta">{{ video.size_bytes }} bytes</span>
+         <form method="post" action="/library/videos/delete" class="inline-form">
+           <input type="hidden" name="name" value="{{ video.name }}">
+           <button type="submit">Delete <span class="visually-hidden">{{ video.name }}</span></button>
+         </form>
++        <div class="source-preview">
++          <video controls playsinline preload="none"
++                 src="/media/videos/{{ video.name }}"></video>
++        </div>
+       </li>
+       {% endfor %}
+     </ul>
+     {% else %}
+     <p>No videos yet.</p>
+     {% endif %}
+   </section>
+ 
+   <section id="panel-images" role="tabpanel" aria-labelledby="tab-images"
+            {% if tab != "images" %}hidden{% endif %}>
+@@ -109,20 +117,24 @@
+ 
+     {% if images %}
+     <ul class="source-list">
+       {% for image in images %}
+       <li>
+         <span>{{ image.name }}</span>
+         <span class="meta">{{ image.size_bytes }} bytes</span>
+         <button type="button" class="image-delete" data-name="{{ image.name }}">
+           Delete <span class="visually-hidden">{{ image.name }}</span>
+         </button>
++        <div class="source-preview">
++          <img src="/media/images/{{ image.name }}"
++               alt="{{ image.name }}" loading="lazy">
++        </div>
+       </li>
+       {% endfor %}
+     </ul>
+     {% else %}
+     <p>No images yet.</p>
+     {% endif %}
+   </section>
+ {% endblock %}
+ {% block scripts %}
+   <script src="/static/library.js" defer></script>
+diff --git a/tests/web/test_library_routes.py b/tests/web/test_library_routes.py
+index 4ad9252..d07b951 100644
+--- a/tests/web/test_library_routes.py
++++ b/tests/web/test_library_routes.py
+@@ -122,10 +122,32 @@ def test_media_library_routes_require_auth_and_serve(tmp_path, monkeypatch):
+     assert img.content == b"png-bytes"
+     assert "image/png" in img.headers.get("content-type", "")
+ 
+ 
+ def test_media_library_routes_404_and_400(tmp_path, monkeypatch):
+     client = _client(tmp_path, monkeypatch)
+     _login(client)
+     assert client.get("/media/videos/missing.mp4").status_code == 404
+     assert client.get("/media/sources/not!!valid.mp4").status_code == 400
+     assert client.get("/media/images/not-a-path.jpg").status_code == 404
++
++
++def test_library_page_embeds_inline_previews(tmp_path, monkeypatch):
++    client = _client(tmp_path, monkeypatch)
++    _login(client)
++    settings = client.app.state.settings
++    settings.sources_dir.mkdir(parents=True, exist_ok=True)
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    settings.images_dir.mkdir(parents=True, exist_ok=True)
++    (settings.sources_dir / "slice.mp4").write_bytes(b"s")
++    (settings.videos_dir / "raw.mp4").write_bytes(b"v")
++    (settings.images_dir / "pic.png").write_bytes(b"i")
++
++    page = client.get("/library")
++    assert page.status_code == 200
++    assert 'preload="none"' in page.text
++    assert 'src="/media/sources/slice.mp4"' in page.text
++    assert 'src="/media/videos/raw.mp4"' in page.text
++
++    images = client.get("/library?tab=images")
++    assert 'src="/media/images/pic.png"' in images.text
++    assert 'loading="lazy"' in images.text

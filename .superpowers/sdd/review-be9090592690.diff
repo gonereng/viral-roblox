@@ -1,0 +1,1190 @@
+=== COMMITS ===
+ab946b6 feat(web): remove YouTube library import and yt-dlp
+
+=== STAT ===
+ README.md                                   |   7 +-
+ pyproject.toml                              |   1 -
+ src/roblox_viral/web/app.py                 |  31 -------
+ src/roblox_viral/web/config.py              |  12 ---
+ src/roblox_viral/web/jobs.py                |  75 +----------------
+ src/roblox_viral/web/static/library.js      | 105 -----------------------
+ src/roblox_viral/web/templates/library.html |  24 +-----
+ src/roblox_viral/web/youtube.py             | 122 ---------------------------
+ tests/web/test_config.py                    |  21 -----
+ tests/web/test_library.py                   |   4 -
+ tests/web/test_youtube.py                   | 126 ----------------------------
+ tests/web/test_youtube_api.py               |  74 ----------------
+ tests/web/test_youtube_jobs.py              |  58 -------------
+ tests/web/test_youtube_removed.py           |  24 ++++++
+ 14 files changed, 28 insertions(+), 656 deletions(-)
+
+=== DIFF ===
+diff --git a/README.md b/README.md
+index 40e41dc..c81bb91 100644
+--- a/README.md
++++ b/README.md
+@@ -41,21 +41,21 @@ Options:
+ 
+ ## Pipeline
+ 
+ 1. Normalize story text
+ 2. Synthesize narration with **Edge TTS** (word-boundary timings)
+ 3. Build **ASS** karaoke captions (yellow active word)
+ 4. **ffmpeg**: mute + loop video to audio length, center-crop to 9:16, burn captions, mux TTS
+ 
+ ## Web app
+ 
+-Browser UI to upload gameplay clips or import a YouTube URL on **Library** (background job; best MP4 ≤1080p; split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI (and `yt-dlp`, installed with the package).
++Browser UI to upload gameplay clips on **Library** (split into 1-minute slices), edit the Gemini prompt on the **Prompt** page, generate a story into the textarea, pick a voice, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+ 
+ On **Generate**, switch **Roblox** (gameplay clip from Library) or **Picture** (upload a still on that tab: jpg/png/webp). Picture videos use the same story, voice, pitch, and speed; optional **Ken Burns** slowly zooms in. The greenscreen overlay applies to Roblox videos only.
+ 
+ ### Local run
+ 
+ ```bash
+ # Windows
+ set APP_PASSWORD=your-password
+ set APP_SECRET=your-long-random-secret
+ 
+@@ -66,33 +66,30 @@ export APP_SECRET=your-long-random-secret
+ pip install -e .
+ roblox-viral-web
+ ```
+ 
+ Or with auto-reload:
+ 
+ ```bash
+ uvicorn roblox_viral.web.app:create_app --factory --reload
+ ```
+ 
+-Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload or YouTube-import a source in **Library**, then use **Generate**.
+-
+-If YouTube shows a bot check (“Sign in to confirm you’re not a bot”), export cookies from a logged-in browser session to `media/youtube_cookies.txt` (Netscape format). Extensions such as “Get cookies.txt LOCALLY” work; or set `YOUTUBE_COOKIES` to that file path. Keep the file private — it authenticates as your account.
++Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload a source in **Library**, then use **Generate**.
+ 
+ Optional env vars:
+ 
+ | Variable | Description |
+ |----------|-------------|
+ | `MEDIA_ROOT` | Upload/output directory (default: `./media`) |
+ | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
+ | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
+ | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
+-| `YOUTUBE_COOKIES` | Optional path to a Netscape `cookies.txt` for YouTube imports (bot checks). If unset, `MEDIA_ROOT/youtube_cookies.txt` is used when present. |
+ | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
+ | `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
+ 
+ ### n8n API
+ 
+ Set `API_KEY` in `.env`. Header: `X-API-Key`.
+ 
+ **Create** — `POST /api/v1/videos` as `multipart/form-data`:
+ 
+ - `voice`, `story`, `type` (`roblox`|`leni`)
+diff --git a/pyproject.toml b/pyproject.toml
+index f6dfe89..e5a81a0 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -9,21 +9,20 @@ description = "Generate vertical Roblox storytime videos with TTS and karaoke ca
+ readme = "README.md"
+ requires-python = ">=3.10"
+ dependencies = [
+   "edge-tts>=6.1.9",
+   "fastapi>=0.115.0",
+   "uvicorn[standard]>=0.30.0",
+   "jinja2>=3.1.0",
+   "python-multipart>=0.0.9",
+   "itsdangerous>=2.2.0",
+   "httpx>=0.27.0",
+-  "yt-dlp>=2024.8.0",
+ ]
+ 
+ [project.scripts]
+ roblox-viral = "roblox_viral.cli:main"
+ roblox-viral-web = "roblox_viral.web.app:main"
+ 
+ [tool.setuptools.packages.find]
+ where = ["src"]
+ 
+ [tool.setuptools.package-data]
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index a747b54..6d9462c 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -61,25 +61,20 @@ class CreateJobBody(BaseModel):
+     source_name: str = ""
+     story: str = ""
+     voice: str | None = None
+     pitch: int | None = None
+     speed: int | None = None
+     video_speed: int | None = None
+     mode: str = "roblox"
+     ken_burns: bool = False
+ 
+ 
+-class YoutubeImportBody(BaseModel):
+-    url: str = ""
+-    name: str = ""
+-
+-
+ async def _read_upload_capped(
+     file: UploadFile, max_bytes: int | None = None
+ ) -> bytes:
+     limit = library_mod.MAX_UPLOAD_BYTES if max_bytes is None else max_bytes
+     chunks: list[bytes] = []
+     total = 0
+     while True:
+         chunk = await file.read(_UPLOAD_CHUNK)
+         if not chunk:
+             break
+@@ -234,46 +229,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+                 "library.html",
+                 {
+                     "sources": list_sources(settings),
+                     "error": str(exc),
+                     "message": None,
+                 },
+                 status_code=400,
+             )
+         return RedirectResponse("/library", status_code=HTTP_303_SEE_OTHER)
+ 
+-    @app.post("/api/library/youtube")
+-    async def youtube_import(
+-        request: Request,
+-        background_tasks: BackgroundTasks,
+-        _: None = Depends(require_login),
+-    ) -> dict:
+-        settings = request.app.state.settings
+-        mgr: JobManager = request.app.state.job_manager
+-        try:
+-            raw = await request.body()
+-            body = YoutubeImportBody.model_validate_json(raw)
+-        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+-            raise HTTPException(
+-                status_code=400, detail="Invalid JSON body"
+-            ) from exc
+-        try:
+-            record = mgr.create_youtube(settings, body.url, body.name)
+-        except BusyError as exc:
+-            raise HTTPException(
+-                status_code=HTTP_409_CONFLICT, detail=str(exc)
+-            ) from exc
+-        except ValueError as exc:
+-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+-        background_tasks.add_task(mgr.run_youtube_job, settings, record.id)
+-        return {"id": record.id, "status": record.status}
+-
+     @app.get("/prompt", response_class=HTMLResponse)
+     def prompt_page(
+         request: Request,
+         _: None = Depends(require_login),
+     ) -> HTMLResponse:
+         settings = request.app.state.settings
+         return templates.TemplateResponse(
+             request,
+             "prompt.html",
+             {
+diff --git a/src/roblox_viral/web/config.py b/src/roblox_viral/web/config.py
+index 2e455af..1796746 100644
+--- a/src/roblox_viral/web/config.py
++++ b/src/roblox_viral/web/config.py
+@@ -29,21 +29,20 @@ def resolve_overlay_video_path(
+     return packaged if packaged.is_file() else None
+ 
+ 
+ @dataclass(frozen=True)
+ class Settings:
+     media_root: Path
+     app_password: str
+     app_secret: str
+     require_password: bool = True
+     gemini_api_key: str = ""
+-    youtube_cookies: str = ""
+     overlay_video: str = ""
+     api_key: str = ""
+ 
+     @property
+     def sources_dir(self) -> Path:
+         return self.media_root / "sources"
+ 
+     @property
+     def videos_dir(self) -> Path:
+         return self.media_root / "videos"
+@@ -57,29 +56,20 @@ class Settings:
+         return self.media_root / "outputs"
+ 
+     @property
+     def jobs_dir(self) -> Path:
+         return self.media_root / "jobs"
+ 
+     @property
+     def prompt_path(self) -> Path:
+         return self.media_root / "prompt.txt"
+ 
+-    @property
+-    def youtube_cookies_path(self) -> Path | None:
+-        """Netscape cookies file for yt-dlp, if configured or present under media/."""
+-        if self.youtube_cookies.strip():
+-            path = Path(self.youtube_cookies).expanduser()
+-            return path if path.is_file() else None
+-        default = self.media_root / "youtube_cookies.txt"
+-        return default if default.is_file() else None
+-
+     @property
+     def overlay_video_path(self) -> Path | None:
+         """Greenscreen intro overlay MP4, if configured or present under media/."""
+         return resolve_overlay_video_path(self.media_root, self.overlay_video)
+ 
+     def ensure_media_dirs(self) -> None:
+         for d in (
+             self.sources_dir,
+             self.videos_dir,
+             self.images_dir,
+@@ -93,28 +83,26 @@ class Settings:
+         media = Path(os.environ.get("MEDIA_ROOT", "media")).resolve()
+         password = os.environ.get("APP_PASSWORD", "")
+         secret = os.environ.get("APP_SECRET", "")
+         require = os.environ.get("APP_REQUIRE_PASSWORD", "1") not in ("0", "false", "False")
+         if require and not password:
+             raise RuntimeError("APP_PASSWORD is required")
+         if not secret:
+             secret = secrets.token_hex(32)
+             warnings.warn("APP_SECRET unset; using ephemeral secret (sessions reset on restart)", stacklevel=2)
+         gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+-        youtube_cookies = os.environ.get("YOUTUBE_COOKIES", "")
+         overlay_video = os.environ.get("OVERLAY_VIDEO", "")
+         api_key = os.environ.get("API_KEY", "")
+         return cls(
+             media_root=media,
+             app_password=password,
+             app_secret=secret,
+             require_password=require,
+             gemini_api_key=gemini_api_key,
+-            youtube_cookies=youtube_cookies,
+             overlay_video=overlay_video,
+             api_key=api_key,
+         )
+ 
+ 
+ @lru_cache
+ def get_settings() -> Settings:
+     return Settings.from_env()
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index 0956570..f8c84b2 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -20,37 +20,29 @@ from roblox_viral.voice import (
+     EdgeTTSProvider,
+     format_edge_pitch,
+     format_edge_rate,
+     validate_video_speed,
+ )
+ from roblox_viral.web.config import Settings
+ from roblox_viral.web.library import (
+     make_output_name,
+     resolve_image,
+     resolve_roblox_media,
+-    slice_into_minute_parts,
+     validate_image_filename,
+     validate_video_filename,
+ )
+-from roblox_viral.web.youtube import (
+-    download_youtube,
+-    validate_stem,
+-    validate_youtube_url,
+-)
+ 
+ JobStatus = Literal[
+     "queued",
+     "synthesizing",
+     "captioning",
+     "rendering",
+-    "downloading",
+-    "slicing",
+     "done",
+     "error",
+ ]
+ 
+ # uuid4().hex — reject path traversal / odd filenames
+ _SAFE_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
+ 
+ 
+ class BusyError(Exception):
+     """Raised when a job is already active (single-flight)."""
+@@ -58,21 +50,21 @@ class BusyError(Exception):
+ 
+ @dataclass
+ class JobRecord:
+     id: str
+     status: JobStatus
+     error: str | None
+     source_name: str
+     voice: str
+     output_name: str | None
+     created_at: str
+-    kind: str = "render"  # "render" | "youtube"
++    kind: str = "render"
+     pitch: int = DEFAULT_PITCH
+     speed: int = DEFAULT_SPEED
+     video_speed: int = DEFAULT_VIDEO_SPEED
+     mode: str = "roblox"  # "roblox" | "picture"
+     ken_burns: bool = False
+     url: str | None = None
+     stem: str | None = None
+     created_slices: list[str] | None = None
+     ephemeral: bool = False
+ 
+@@ -152,55 +144,20 @@ class JobManager:
+             self._persist(settings, record)
+         except Exception:
+             with self._lock:
+                 if self._active_id == job_id:
+                     self._active_id = None
+                 self._jobs.pop(job_id, None)
+                 self._stories.pop(job_id, None)
+             raise
+         return record
+ 
+-    def create_youtube(self, settings: Settings, url: str, stem: str) -> JobRecord:
+-        safe_url = validate_youtube_url(url)
+-        safe_stem = validate_stem(stem)
+-
+-        with self._lock:
+-            if self._active_id is not None:
+-                raise BusyError("A job is already in progress")
+-            job_id = uuid.uuid4().hex
+-            record = JobRecord(
+-                id=job_id,
+-                status="queued",
+-                error=None,
+-                source_name="",
+-                voice="",
+-                output_name=None,
+-                created_at=datetime.now(timezone.utc).isoformat(),
+-                kind="youtube",
+-                url=safe_url,
+-                stem=safe_stem,
+-                created_slices=None,
+-            )
+-            self._jobs[job_id] = record
+-            self._active_id = job_id
+-
+-        try:
+-            (settings.jobs_dir / job_id).mkdir(parents=True, exist_ok=True)
+-            self._persist(settings, record)
+-        except Exception:
+-            with self._lock:
+-                if self._active_id == job_id:
+-                    self._active_id = None
+-                self._jobs.pop(job_id, None)
+-            raise
+-        return record
+-
+     def get(self, job_id: str, settings: Settings | None = None) -> JobRecord | None:
+         with self._lock:
+             cached = self._jobs.get(job_id)
+             if cached is not None:
+                 return cached
+ 
+         if settings is None or not _SAFE_JOB_ID.fullmatch(job_id):
+             return None
+ 
+         jobs_root = settings.jobs_dir.resolve()
+@@ -308,50 +265,20 @@ class JobManager:
+             record.output_name = output_name
+             self._set_status(settings, record, "done")
+         except Exception as exc:
+             record.error = str(exc)
+             self._set_status(settings, record, "error")
+         finally:
+             with self._lock:
+                 if self._active_id == job_id:
+                     self._active_id = None
+ 
+-    def run_youtube_job(self, settings: Settings, job_id: str) -> None:
+-        record = self._jobs.get(job_id)
+-        if record is None:
+-            raise KeyError(f"Unknown job: {job_id}")
+-        job_dir = settings.jobs_dir / job_id
+-        download_path = job_dir / "download.mp4"
+-        try:
+-            self._set_status(settings, record, "downloading")
+-            download_youtube(
+-                record.url or "",
+-                download_path,
+-                cookies_path=settings.youtube_cookies_path,
+-            )
+-
+-            self._set_status(settings, record, "slicing")
+-            slices = slice_into_minute_parts(
+-                settings, download_path, record.stem or "video"
+-            )
+-            record.created_slices = [s.name for s in slices]
+-            self._set_status(settings, record, "done")
+-        except Exception as exc:
+-            record.error = str(exc)
+-            self._set_status(settings, record, "error")
+-        finally:
+-            download_path.unlink(missing_ok=True)
+-            download_path.with_suffix("").unlink(missing_ok=True)
+-            with self._lock:
+-                if self._active_id == job_id:
+-                    self._active_id = None
+-
+     def _set_status(
+         self, settings: Settings, record: JobRecord, status: JobStatus
+     ) -> None:
+         record.status = status
+         self._persist(settings, record)
+ 
+     def _persist(self, settings: Settings, record: JobRecord) -> None:
+         path = settings.jobs_dir / record.id / "status.json"
+         path.parent.mkdir(parents=True, exist_ok=True)
+         path.write_text(json.dumps(asdict(record), indent=2), encoding="utf-8")
+diff --git a/src/roblox_viral/web/static/library.js b/src/roblox_viral/web/static/library.js
+deleted file mode 100644
+index 42f62c8..0000000
+--- a/src/roblox_viral/web/static/library.js
++++ /dev/null
+@@ -1,105 +0,0 @@
+-(() => {
+-  const form = document.getElementById("youtube-form");
+-  if (!form) return;
+-
+-  const statusEl = document.getElementById("yt-status");
+-  const errorEl = document.getElementById("yt-error");
+-  const messageEl = document.getElementById("yt-message");
+-  const btn = document.getElementById("youtube-btn");
+-  let pollTimer = null;
+-
+-  function setStatus(t) {
+-    statusEl.textContent = t;
+-  }
+-  function showError(msg) {
+-    errorEl.hidden = false;
+-    errorEl.textContent = msg;
+-    messageEl.hidden = true;
+-  }
+-  function showMessage(msg) {
+-    messageEl.hidden = false;
+-    messageEl.textContent = msg;
+-    errorEl.hidden = true;
+-  }
+-  function clearFeedback() {
+-    errorEl.hidden = true;
+-    errorEl.textContent = "";
+-    messageEl.hidden = true;
+-    messageEl.textContent = "";
+-  }
+-  function stopPolling() {
+-    if (pollTimer !== null) {
+-      clearInterval(pollTimer);
+-      pollTimer = null;
+-    }
+-  }
+-
+-  async function pollJob(jobId) {
+-    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {
+-      headers: { Accept: "application/json" },
+-    });
+-    if (!res.ok) throw new Error(`Status request failed (${res.status})`);
+-    const job = await res.json();
+-    setStatus(job.status);
+-    if (job.status === "done") {
+-      stopPolling();
+-      btn.disabled = false;
+-      const slices = (job.created_slices || []).join(", ");
+-      showMessage(slices ? `Created: ${slices}` : "Import complete.");
+-      window.setTimeout(() => window.location.reload(), 800);
+-      return;
+-    }
+-    if (job.status === "error") {
+-      stopPolling();
+-      btn.disabled = false;
+-      showError(job.error || "Import failed");
+-    }
+-  }
+-
+-  form.addEventListener("submit", async (event) => {
+-    event.preventDefault();
+-    clearFeedback();
+-    stopPolling();
+-    btn.disabled = true;
+-    setStatus("starting");
+-    try {
+-      const res = await fetch("/api/library/youtube", {
+-        method: "POST",
+-        headers: {
+-          "Content-Type": "application/json",
+-          Accept: "application/json",
+-        },
+-        body: JSON.stringify({
+-          url: document.getElementById("youtube_url").value,
+-          name: document.getElementById("youtube_name").value,
+-        }),
+-      });
+-      const body = await res.json().catch(() => ({}));
+-      if (res.status === 409) {
+-        btn.disabled = false;
+-        setStatus("busy");
+-        showError(body.detail || "A job is already in progress");
+-        return;
+-      }
+-      if (!res.ok) {
+-        btn.disabled = false;
+-        setStatus("error");
+-        showError(body.detail || `Import failed (${res.status})`);
+-        return;
+-      }
+-      setStatus(body.status || "queued");
+-      pollTimer = setInterval(() => {
+-        pollJob(body.id).catch((err) => {
+-          stopPolling();
+-          btn.disabled = false;
+-          showError(err.message || String(err));
+-        });
+-      }, 1000);
+-      await pollJob(body.id);
+-    } catch (err) {
+-      btn.disabled = false;
+-      setStatus("error");
+-      showError(err.message || String(err));
+-    }
+-  });
+-})();
+diff --git a/src/roblox_viral/web/templates/library.html b/src/roblox_viral/web/templates/library.html
+index b461a49..292513c 100644
+--- a/src/roblox_viral/web/templates/library.html
++++ b/src/roblox_viral/web/templates/library.html
+@@ -1,16 +1,16 @@
+ {% extends "base.html" %}
+ {% block title %}Library — Roblox Viral{% endblock %}
+ {% block content %}
+   <h1>Library</h1>
+   <p class="lede">
+-    Upload a gameplay clip or import from YouTube. Clips are split into
++    Upload a gameplay clip. Clips are split into
+     <strong>1-minute slices</strong> named <code>name-1.mp4</code>,
+     <code>name-2.mp4</code>, …
+     A leftover shorter than 1 minute is discarded.
+     Pick a slice on the Generate page.
+   </p>
+ 
+   {% if error %}
+   <p class="error">{{ error }}</p>
+   {% endif %}
+   {% if message %}
+@@ -18,50 +18,28 @@
+   {% endif %}
+ 
+   <form class="upload-form" method="post" action="/library/upload" enctype="multipart/form-data">
+     <label>
+       Video file
+       <input type="file" name="file" accept=".mp4,.mov,.webm,.mkv,video/*" required>
+     </label>
+     <button type="submit">Upload</button>
+   </form>
+ 
+-  <h2>Import from YouTube</h2>
+-  <form id="youtube-form" class="upload-form">
+-    <label>
+-      YouTube URL
+-      <input id="youtube_url" name="url" type="url" required placeholder="https://www.youtube.com/watch?v=...">
+-    </label>
+-    <label>
+-      Name (slice prefix)
+-      <input id="youtube_name" name="name" type="text" required placeholder="gameplay" pattern="[A-Za-z0-9._ \-]+" title="Letters, numbers, spaces, . _ -">
+-    </label>
+-    <button id="youtube-btn" type="submit">Import from YouTube</button>
+-  </form>
+-
+-  <section class="progress" aria-live="polite">
+-    <p>Import status: <span id="yt-status">idle</span></p>
+-    <p id="yt-error" class="error" hidden></p>
+-    <p id="yt-message" class="ok" hidden></p>
+-  </section>
+-
+   <h2>Sources (1-minute slices)</h2>
+   {% if sources %}
+   <ul class="source-list">
+     {% for s in sources %}
+     <li>
+       <span>{{ s.name }}</span>
+       <span class="meta">{{ s.size_bytes }} bytes</span>
+       <form method="post" action="/library/delete" class="inline-form">
+         <input type="hidden" name="name" value="{{ s.name }}">
+         <button type="submit">Delete</button>
+       </form>
+     </li>
+     {% endfor %}
+   </ul>
+   {% else %}
+   <p>No source videos yet.</p>
+   {% endif %}
+ {% endblock %}
+-{% block scripts %}
+-  <script src="/static/library.js" defer></script>
+-{% endblock %}
+diff --git a/src/roblox_viral/web/youtube.py b/src/roblox_viral/web/youtube.py
+deleted file mode 100644
+index c436579..0000000
+--- a/src/roblox_viral/web/youtube.py
++++ /dev/null
+@@ -1,122 +0,0 @@
+-from __future__ import annotations
+-
+-import re
+-from pathlib import Path
+-from urllib.parse import urlparse
+-
+-import yt_dlp
+-
+-YOUTUBE_FORMAT = (
+-    "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/"
+-    "b[height<=1080][ext=mp4]/b[height<=1080]/b"
+-)
+-
+-# Prefer non-web clients; YouTube often 403s default web progressive URLs.
+-_YOUTUBE_EXTRACTOR_ARGS = {
+-    "youtube": {"player_client": ["android", "ios", "web"]}
+-}
+-_HTTP_HEADERS = {
+-    "User-Agent": (
+-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+-        "AppleWebKit/537.36 (KHTML, like Gecko) "
+-        "Chrome/131.0.0.0 Safari/537.36"
+-    ),
+-}
+-
+-_STEM_RE = re.compile(r"^[A-Za-z0-9._ -]+$")
+-_VIDEO_EXT = re.compile(r"\.(mp4|mov|webm|mkv)$", re.I)
+-
+-
+-def validate_youtube_url(url: str) -> str:
+-    cleaned = (url or "").strip()
+-    if not cleaned:
+-        raise ValueError("YouTube URL is required")
+-    parsed = urlparse(cleaned)
+-    host = (parsed.netloc or "").lower()
+-    if "youtube.com" not in host and "youtu.be" not in host:
+-        raise ValueError("URL must be a YouTube link")
+-    return cleaned
+-
+-
+-def validate_stem(name: str) -> str:
+-    cleaned = (name or "").strip()
+-    if not cleaned:
+-        raise ValueError("Name is required")
+-    if _VIDEO_EXT.search(cleaned):
+-        raise ValueError("Name must not include a file extension")
+-    if (
+-        not _STEM_RE.fullmatch(cleaned)
+-        or ".." in cleaned
+-        or "/" in cleaned
+-        or "\\" in cleaned
+-    ):
+-        raise ValueError("Invalid name (use letters, numbers, spaces, . _ -)")
+-    return cleaned
+-
+-
+-def download_youtube(
+-    url: str,
+-    dest: Path,
+-    *,
+-    cookies_path: Path | None = None,
+-) -> Path:
+-    """Download best ≤1080p MP4 to dest. Raises RuntimeError on failure."""
+-    safe_url = validate_youtube_url(url)
+-    dest = Path(dest)
+-    dest.parent.mkdir(parents=True, exist_ok=True)
+-    # Force an extension placeholder so yt-dlp does not write a bare stem path.
+-    outtmpl = str(dest.parent / f"{dest.stem}.%(ext)s")
+-    opts: dict = {
+-        "format": YOUTUBE_FORMAT,
+-        "outtmpl": outtmpl,
+-        "merge_output_format": "mp4",
+-        "quiet": True,
+-        "no_warnings": True,
+-        "noprogress": True,
+-        "extractor_args": _YOUTUBE_EXTRACTOR_ARGS,
+-        "http_headers": _HTTP_HEADERS,
+-    }
+-    if cookies_path is not None:
+-        cookie_file = Path(cookies_path)
+-        if not cookie_file.is_file():
+-            raise RuntimeError(f"YouTube cookies file not found: {cookie_file}")
+-        opts["cookiefile"] = str(cookie_file)
+-    try:
+-        with yt_dlp.YoutubeDL(opts) as ydl:
+-            ydl.download([safe_url])
+-    except Exception as exc:
+-        msg = str(exc)
+-        if "Sign in to confirm" in msg or "not a bot" in msg.lower():
+-            raise RuntimeError(
+-                "YouTube bot check blocked the download. Export browser cookies to "
+-                "media/youtube_cookies.txt (or set YOUTUBE_COOKIES to that file path), "
+-                "then retry. See README."
+-            ) from exc
+-        raise RuntimeError(f"YouTube download failed: {exc}") from exc
+-
+-    produced = _find_download_product(dest)
+-    if produced is None:
+-        raise RuntimeError("YouTube download produced no file")
+-    if produced != dest:
+-        produced.replace(dest)
+-    if not dest.is_file() or dest.stat().st_size == 0:
+-        raise RuntimeError("YouTube download produced no file")
+-    return dest
+-
+-
+-def _find_download_product(dest: Path) -> Path | None:
+-    """Locate the file yt-dlp wrote for this dest stem."""
+-    candidates: list[Path] = []
+-    for path in (
+-        dest,
+-        dest.with_suffix(".mp4"),
+-        dest.with_suffix(".mkv"),
+-        dest.with_suffix(".webm"),
+-        dest.parent / dest.stem,  # bare name without extension
+-    ):
+-        if path.is_file() and path.stat().st_size > 0:
+-            candidates.append(path)
+-    for path in sorted(dest.parent.glob(dest.stem + ".*")):
+-        if path.is_file() and path.stat().st_size > 0 and path not in candidates:
+-            candidates.append(path)
+-    return candidates[0] if candidates else None
+diff --git a/tests/web/test_config.py b/tests/web/test_config.py
+index 3d007cd..fc4bef2 100644
+--- a/tests/web/test_config.py
++++ b/tests/web/test_config.py
+@@ -18,41 +18,20 @@ def test_ensure_media_dirs(tmp_path: Path, monkeypatch):
+ def test_gemini_settings_and_prompt_path(tmp_path: Path, monkeypatch):
+     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+     monkeypatch.setenv("APP_PASSWORD", "secret")
+     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+     settings = Settings.from_env()
+     assert settings.gemini_api_key == "test-gemini-key"
+     assert settings.prompt_path == settings.media_root / "prompt.txt"
+ 
+ 
+-def test_youtube_cookies_path_default_and_env(tmp_path: Path, monkeypatch):
+-    media = tmp_path / "media"
+-    media.mkdir()
+-    monkeypatch.setenv("MEDIA_ROOT", str(media))
+-    monkeypatch.setenv("APP_PASSWORD", "secret")
+-    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+-    monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+-    settings = Settings.from_env()
+-    assert settings.youtube_cookies_path is None
+-
+-    cookies = media / "youtube_cookies.txt"
+-    cookies.write_text("# Netscape\n", encoding="utf-8")
+-    assert settings.youtube_cookies_path == cookies
+-
+-    other = tmp_path / "other_cookies.txt"
+-    other.write_text("# Netscape\n", encoding="utf-8")
+-    monkeypatch.setenv("YOUTUBE_COOKIES", str(other))
+-    settings2 = Settings.from_env()
+-    assert settings2.youtube_cookies_path == other
+-
+-
+ def test_overlay_video_path_default_and_env(tmp_path: Path, monkeypatch):
+     media = tmp_path / "media"
+     media.mkdir()
+     monkeypatch.setenv("MEDIA_ROOT", str(media))
+     monkeypatch.setenv("APP_PASSWORD", "secret")
+     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+     monkeypatch.delenv("OVERLAY_VIDEO", raising=False)
+     settings = Settings.from_env()
+     # Packaged asset may exist in the checkout; media override is tested below.
+     packaged = settings.overlay_video_path
+diff --git a/tests/web/test_library.py b/tests/web/test_library.py
+index acbe019..aa840bc 100644
+--- a/tests/web/test_library.py
++++ b/tests/web/test_library.py
+@@ -210,21 +210,20 @@ def test_images_not_listed_as_video_sources(tmp_path, monkeypatch):
+ def test_save_video_stores_as_is_no_slice(tmp_path, monkeypatch):
+     from roblox_viral.web.config import Settings
+     from roblox_viral.web import library as lib
+ 
+     media = tmp_path / "media"
+     s = Settings(
+         media_root=media,
+         app_password="x",
+         app_secret="dev-secret-key-at-least-32-chars!!",
+         require_password=False,
+-        youtube_cookies="",
+     )
+     s.ensure_media_dirs()
+     called = {"slice": False}
+ 
+     def boom(*a, **k):
+         called["slice"] = True
+         raise AssertionError("slice must not run")
+ 
+     monkeypatch.setattr(lib, "slice_into_minute_parts", boom)
+     item = lib.save_video(s, "full.mp4", b"rawbytes")
+@@ -237,56 +236,53 @@ def test_save_video_stores_as_is_no_slice(tmp_path, monkeypatch):
+ def test_resolve_roblox_media_sources_win(tmp_path):
+     from roblox_viral.web.config import Settings
+     from roblox_viral.web import library as lib
+ 
+     media = tmp_path / "media"
+     s = Settings(
+         media_root=media,
+         app_password="x",
+         app_secret="dev-secret-key-at-least-32-chars!!",
+         require_password=False,
+-        youtube_cookies="",
+     )
+     s.ensure_media_dirs()
+     (s.sources_dir / "same.mp4").write_bytes(b"slice")
+     (s.videos_dir / "same.mp4").write_bytes(b"raw")
+     path = lib.resolve_roblox_media(s, "same.mp4")
+     assert path == (s.sources_dir / "same.mp4").resolve()
+ 
+ 
+ def test_resolve_roblox_media_falls_back_to_videos(tmp_path):
+     from roblox_viral.web.config import Settings
+     from roblox_viral.web import library as lib
+ 
+     media = tmp_path / "media"
+     s = Settings(
+         media_root=media,
+         app_password="x",
+         app_secret="dev-secret-key-at-least-32-chars!!",
+         require_password=False,
+-        youtube_cookies="",
+     )
+     s.ensure_media_dirs()
+     (s.videos_dir / "only.mp4").write_bytes(b"raw")
+     path = lib.resolve_roblox_media(s, "only.mp4")
+     assert path == (s.videos_dir / "only.mp4").resolve()
+ 
+ 
+ def test_list_roblox_sources_labels_kinds(tmp_path):
+     from roblox_viral.web.config import Settings
+     from roblox_viral.web import library as lib
+ 
+     media = tmp_path / "media"
+     s = Settings(
+         media_root=media,
+         app_password="x",
+         app_secret="dev-secret-key-at-least-32-chars!!",
+         require_password=False,
+-        youtube_cookies="",
+     )
+     s.ensure_media_dirs()
+     (s.sources_dir / "a-1.mp4").write_bytes(b"1")
+     (s.videos_dir / "b.mp4").write_bytes(b"2")
+     items = lib.list_roblox_sources(s)
+     kinds = {i.name: i.kind for i in items}
+     assert kinds["a-1.mp4"] == "slice"
+     assert kinds["b.mp4"] == "video"
+diff --git a/tests/web/test_youtube.py b/tests/web/test_youtube.py
+deleted file mode 100644
+index 2a8081f..0000000
+--- a/tests/web/test_youtube.py
++++ /dev/null
+@@ -1,126 +0,0 @@
+-from pathlib import Path
+-
+-import pytest
+-
+-from roblox_viral.web.youtube import (
+-    download_youtube,
+-    validate_stem,
+-    validate_youtube_url,
+-)
+-
+-
+-def test_validate_youtube_url_accepts_watch_and_short():
+-    assert "youtube.com" in validate_youtube_url(
+-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+-    )
+-    assert "youtu.be" in validate_youtube_url("https://youtu.be/dQw4w9WgXcQ")
+-
+-
+-def test_validate_youtube_url_rejects_non_youtube():
+-    with pytest.raises(ValueError, match="YouTube"):
+-        validate_youtube_url("https://example.com/watch?v=abc")
+-
+-
+-def test_validate_stem_ok():
+-    assert validate_stem("  gameplay clip ") == "gameplay clip"
+-
+-
+-def test_validate_stem_rejects_extension_and_empty():
+-    with pytest.raises(ValueError):
+-        validate_stem("clip.mp4")
+-    with pytest.raises(ValueError):
+-        validate_stem("   ")
+-    with pytest.raises(ValueError):
+-        validate_stem("../evil")
+-
+-
+-def test_download_youtube_writes_dest(tmp_path, monkeypatch):
+-    dest = tmp_path / "download.mp4"
+-
+-    class FakeYDL:
+-        def __init__(self, opts):
+-            self.opts = opts
+-
+-        def __enter__(self):
+-            return self
+-
+-        def __exit__(self, *args):
+-            return False
+-
+-        def download(self, urls):
+-            dest.write_bytes(b"fake-mp4")
+-
+-    monkeypatch.setattr(
+-        "roblox_viral.web.youtube.yt_dlp.YoutubeDL",
+-        FakeYDL,
+-    )
+-    out = download_youtube("https://www.youtube.com/watch?v=dQw4w9WgXcQ", dest)
+-    assert out == dest
+-    assert dest.read_bytes() == b"fake-mp4"
+-
+-
+-def test_find_download_product_accepts_extensionless_file(tmp_path):
+-    from roblox_viral.web.youtube import _find_download_product
+-
+-    dest = tmp_path / "download.mp4"
+-    bare = tmp_path / "download"
+-    bare.write_bytes(b"video-bytes")
+-    found = _find_download_product(dest)
+-    assert found == bare
+-
+-
+-def test_download_youtube_passes_cookiefile(tmp_path, monkeypatch):
+-    dest = tmp_path / "download.mp4"
+-    cookies = tmp_path / "cookies.txt"
+-    cookies.write_text("# Netscape\n", encoding="utf-8")
+-    seen = {}
+-
+-    class FakeYDL:
+-        def __init__(self, opts):
+-            seen.update(opts)
+-
+-        def __enter__(self):
+-            return self
+-
+-        def __exit__(self, *args):
+-            return False
+-
+-        def download(self, urls):
+-            dest.write_bytes(b"fake-mp4")
+-
+-    monkeypatch.setattr(
+-        "roblox_viral.web.youtube.yt_dlp.YoutubeDL",
+-        FakeYDL,
+-    )
+-    download_youtube(
+-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+-        dest,
+-        cookies_path=cookies,
+-    )
+-    assert seen.get("cookiefile") == str(cookies)
+-
+-
+-def test_download_youtube_bot_check_message(tmp_path, monkeypatch):
+-    dest = tmp_path / "download.mp4"
+-
+-    class FakeYDL:
+-        def __init__(self, opts):
+-            pass
+-
+-        def __enter__(self):
+-            return self
+-
+-        def __exit__(self, *args):
+-            return False
+-
+-        def download(self, urls):
+-            raise Exception(
+-                "ERROR: [youtube] abc: Sign in to confirm you’re not a bot."
+-            )
+-
+-    monkeypatch.setattr(
+-        "roblox_viral.web.youtube.yt_dlp.YoutubeDL",
+-        FakeYDL,
+-    )
+-    with pytest.raises(RuntimeError, match="cookies"):
+-        download_youtube("https://www.youtube.com/watch?v=dQw4w9WgXcQ", dest)
+diff --git a/tests/web/test_youtube_api.py b/tests/web/test_youtube_api.py
+deleted file mode 100644
+index 9847bd6..0000000
+--- a/tests/web/test_youtube_api.py
++++ /dev/null
+@@ -1,74 +0,0 @@
+-from pathlib import Path
+-
+-from fastapi.testclient import TestClient
+-
+-from roblox_viral.web.app import create_app
+-from roblox_viral.web.config import Settings
+-from roblox_viral.web.library import SourceVideo
+-
+-
+-def _client(tmp_path, monkeypatch):
+-    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+-    monkeypatch.setenv("APP_PASSWORD", "s3cret")
+-    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+-    return TestClient(create_app(Settings.from_env()))
+-
+-
+-def _login(c: TestClient) -> None:
+-    r = c.post("/login", data={"password": "s3cret"}, follow_redirects=False)
+-    assert r.status_code in (302, 303)
+-
+-
+-def test_youtube_import_requires_auth(tmp_path, monkeypatch):
+-    c = _client(tmp_path, monkeypatch)
+-    assert (
+-        c.post(
+-            "/api/library/youtube",
+-            json={"url": "https://youtu.be/dQw4w9WgXcQ", "name": "clip"},
+-        ).status_code
+-        == 401
+-    )
+-
+-
+-def test_youtube_import_rejects_bad_name(tmp_path, monkeypatch):
+-    c = _client(tmp_path, monkeypatch)
+-    _login(c)
+-    r = c.post(
+-        "/api/library/youtube",
+-        json={"url": "https://youtu.be/dQw4w9WgXcQ", "name": "bad.mp4"},
+-    )
+-    assert r.status_code == 400
+-
+-
+-def test_youtube_import_success(tmp_path, monkeypatch):
+-    def fake_download(url: str, dest: Path, **kwargs) -> Path:
+-        dest.write_bytes(b"vid")
+-        return dest
+-
+-    def fake_slice(settings, uploaded_path, base_stem):
+-        name = f"{base_stem}-1.mp4"
+-        path = settings.sources_dir / name
+-        path.write_bytes(b"slice")
+-        return [SourceVideo(name, path, 5)]
+-
+-    monkeypatch.setattr("roblox_viral.web.jobs.download_youtube", fake_download)
+-    monkeypatch.setattr(
+-        "roblox_viral.web.jobs.slice_into_minute_parts", fake_slice
+-    )
+-
+-    c = _client(tmp_path, monkeypatch)
+-    _login(c)
+-    r = c.post(
+-        "/api/library/youtube",
+-        json={
+-            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+-            "name": "gameplay",
+-        },
+-    )
+-    assert r.status_code == 200
+-    job_id = r.json()["id"]
+-    status = c.get(f"/api/jobs/{job_id}")
+-    assert status.status_code == 200
+-    body = status.json()
+-    assert body["status"] == "done"
+-    assert body["created_slices"] == ["gameplay-1.mp4"]
+diff --git a/tests/web/test_youtube_jobs.py b/tests/web/test_youtube_jobs.py
+deleted file mode 100644
+index 62f97f8..0000000
+--- a/tests/web/test_youtube_jobs.py
++++ /dev/null
+@@ -1,58 +0,0 @@
+-from pathlib import Path
+-
+-import pytest
+-
+-from roblox_viral.web.config import Settings
+-from roblox_viral.web.jobs import BusyError, JobManager
+-from roblox_viral.web.library import SourceVideo
+-
+-
+-def _settings(tmp_path, monkeypatch) -> Settings:
+-    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+-    monkeypatch.setenv("APP_PASSWORD", "x")
+-    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+-    s = Settings.from_env()
+-    s.ensure_media_dirs()
+-    return s
+-
+-
+-def test_youtube_job_busy_blocks_render(tmp_path, monkeypatch):
+-    s = _settings(tmp_path, monkeypatch)
+-    mgr = JobManager()
+-    mgr._active_id = "busy"
+-    (s.sources_dir / "clip.mp4").write_bytes(b"x")
+-    with pytest.raises(BusyError, match="already in progress"):
+-        mgr.create(s, "clip.mp4", "Hi.\n", "en-US-EmmaNeural")
+-
+-
+-def test_run_youtube_job_success(tmp_path, monkeypatch):
+-    s = _settings(tmp_path, monkeypatch)
+-    mgr = JobManager()
+-
+-    def fake_download(url: str, dest: Path, **kwargs) -> Path:
+-        dest.write_bytes(b"video")
+-        return dest
+-
+-    def fake_slice(settings, uploaded_path, base_stem):
+-        name = f"{base_stem}-1.mp4"
+-        path = settings.sources_dir / name
+-        path.write_bytes(b"slice")
+-        return [SourceVideo(name, path, path.stat().st_size)]
+-
+-    monkeypatch.setattr("roblox_viral.web.jobs.download_youtube", fake_download)
+-    monkeypatch.setattr(
+-        "roblox_viral.web.jobs.slice_into_minute_parts", fake_slice
+-    )
+-
+-    record = mgr.create_youtube(
+-        s, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "gameplay"
+-    )
+-    assert record.kind == "youtube"
+-    assert record.status == "queued"
+-    mgr.run_youtube_job(s, record.id)
+-    done = mgr.get(record.id, s)
+-    assert done is not None
+-    assert done.status == "done"
+-    assert done.created_slices == ["gameplay-1.mp4"]
+-    assert (s.sources_dir / "gameplay-1.mp4").is_file()
+-    assert mgr._active_id is None
+diff --git a/tests/web/test_youtube_removed.py b/tests/web/test_youtube_removed.py
+new file mode 100644
+index 0000000..a23076b
+--- /dev/null
++++ b/tests/web/test_youtube_removed.py
+@@ -0,0 +1,24 @@
++from fastapi.testclient import TestClient
++
++from roblox_viral.web.app import create_app
++from roblox_viral.web.config import Settings
++
++
++def test_youtube_endpoint_gone(tmp_path, monkeypatch):
++    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
++    monkeypatch.setenv("APP_PASSWORD", "s3cret")
++    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
++    client = TestClient(create_app(Settings.from_env()))
++    login = client.post(
++        "/login",
++        data={"password": "s3cret"},
++        follow_redirects=False,
++    )
++    assert login.status_code in (302, 303)
++
++    response = client.post(
++        "/api/library/youtube",
++        json={"url": "https://youtu.be/x", "name": "a"},
++    )
++
++    assert response.status_code == 404

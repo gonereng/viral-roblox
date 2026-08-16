@@ -1,0 +1,2221 @@
+=== COMMITS ===
+2649434 docs: document Single/Reddit generate modes
+4c00e38 feat(api): n8n types single and reddit; reject roblox
+f4da3ea feat(web): Generate tabs for Single, Picture, and Reddit
+abb2d11 feat(web): API and generate context for single/reddit modes
+ad795c7 feat(web): job modes single and reddit with concat background
+b6c0b07 feat: build concat background from reddit clip segments
+36d0d66 feat: add reddit clip planner (shuffle, reshuffle, trim)
+b1e15b4 feat: scale greenscreen overlay to fit full frame (2x)
+
+=== STAT ===
+ .superpowers/sdd/gsr-task-6-report.md        |  19 +++++
+ README.md                                    |  21 +++--
+ scripts/test-n8n-api.ps1                     |   2 +-
+ src/roblox_viral/reddit_clips.py             |  62 ++++++++++++++
+ src/roblox_viral/render.py                   |  74 +++++++++++++++-
+ src/roblox_viral/web/api_v1.py               |  22 +++--
+ src/roblox_viral/web/app.py                  |  13 +--
+ src/roblox_viral/web/jobs.py                 |  59 ++++++++++---
+ src/roblox_viral/web/static/app.js           |  58 +++++++++----
+ src/roblox_viral/web/templates/generate.html |  23 +++--
+ tests/test_reddit_clips.py                   |  29 +++++++
+ tests/test_render.py                         | 119 +++++++++++++++++++++++++-
+ tests/web/test_api.py                        | 111 +++++++++++++++++++++---
+ tests/web/test_api_v1.py                     |  98 +++++++++++++++++-----
+ tests/web/test_jobs.py                       | 121 +++++++++++++++++++++++++--
+ 15 files changed, 735 insertions(+), 96 deletions(-)
+
+=== DIFF ===
+diff --git a/.superpowers/sdd/gsr-task-6-report.md b/.superpowers/sdd/gsr-task-6-report.md
+new file mode 100644
+index 0000000..75164cb
+--- /dev/null
++++ b/.superpowers/sdd/gsr-task-6-report.md
+@@ -0,0 +1,19 @@
++# Task 6 Report: Generate frontend three tabs
++
++**Branch:** `feat/generate-single-reddit`  
++**Date:** 2026-08-15  
++**Status:** DONE
++
++## Summary
++
++Generate now provides Single background video, Picture, and Reddit tabs. Mode-specific inventory controls submit availability, video speed visibility, and the API payload; Reddit uses the Library Videos pool and sends an empty `source_name`.
++
++## TDD
++
++**RED:** updated HTML assertions failed on the missing `tab-single`.  
++**GREEN:** `pytest tests/web/test_api.py -q` → **25 passed**.  
++**Verification:** `pytest -q` → **150 passed**; `node --check src/roblox_viral/web/static/app.js` → exit 0.
++
++## Commit
++
++`feat(web): Generate tabs for Single, Picture, and Reddit`
+diff --git a/README.md b/README.md
+index 577f384..6a19bc8 100644
+--- a/README.md
++++ b/README.md
+@@ -51,21 +51,29 @@ Options:
+ Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story prompt), and **Generate** page to pick sources, write a story, choose voice settings, and render storytime videos. Requires the same **ffmpeg** dependency as the CLI.
+ 
+ **Library** has three tabs:
+ 
+ | Tab | Behavior |
+ |-----|----------|
+ | **1-minute clips** | Upload gameplay; split into complete one-minute slices (`media/sources/`) |
+ | **Videos** | Upload full clips as-is, no slicing (`media/videos/`) |
+ | **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
+ 
+-On **Generate**, switch **Roblox** (pick a labeled clip from Library — `(1m)` slices or `(video)` raw) or **Picture** (pick an image from Library). Roblox mode adds a **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Picture videos support optional **Ken Burns** slow zoom. The greenscreen overlay applies to Roblox videos only.
++On **Generate**, pick a background mode via three tabs:
++
++| Tab | Behavior |
++|-----|----------|
++| **Single background video** | Pick a one-minute clip from Library → 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Greenscreen overlay at start. |
++| **Picture** | Pick an image from Library → Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
++| **Reddit** | No source picker — auto-concat random clips from Library → Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Greenscreen overlay at start. Requires at least one video in the Videos pool. |
++
++The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080×1920 frame** (2× the former half-height target), chromakeyed, and centered. Applies to **Single** and **Reddit** only.
+ 
+ ### Local run
+ 
+ ```bash
+ # Windows
+ set APP_PASSWORD=your-password
+ set APP_SECRET=your-long-random-secret
+ 
+ # macOS / Linux
+ export APP_PASSWORD=your-password
+@@ -85,46 +93,47 @@ Open http://127.0.0.1:8000, log in with `APP_PASSWORD`, upload media in **Librar
+ 
+ Optional env vars:
+ 
+ | Variable | Description |
+ |----------|-------------|
+ | `MEDIA_ROOT` | Upload/output directory (default: `./media`) |
+ | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
+ | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
+ | `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
+ | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
+-| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are keyed and centered at half height at the start of each generated video (audio ignored). |
++| `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are chromakeyed, scaled to fit inside the full 1080×1920 frame, centered, and composited at the start of **Single** and **Reddit** videos (audio ignored). |
+ 
+ ### n8n API
+ 
+ Set `API_KEY` in `.env`. Header: `X-API-Key`.
+ 
+ **Create** — `POST /api/v1/videos` as `multipart/form-data`:
+ 
+-- `voice`, `story`, `type` (`roblox`|`leni`)
++- `voice`, `story`, `type` (`single`|`reddit`|`leni`; `roblox` is rejected — use `single`)
+ - optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50…200, default 100)
+-- either file field `media` **or** text field `source_name` (Library clip or raw video name)
++- for `single` or `leni`: either file field `media` **or** text field `source_name` (Library clip or raw video/image name)
++- for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)
+ 
+ Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`.
+ 
+ PowerShell / Windows (upload via `curl.exe` — works on PowerShell 5.1):
+ 
+ ```powershell
+ $apiKey = "your-key"
+ $base = "http://127.0.0.1:8000"
+ $video = "C:\path\to\clip.mp4"
+ 
+ $create = curl.exe -s -X POST "$base/api/v1/videos" `
+   -H "X-API-Key: $apiKey" `
+   -F "voice=en-US-EmmaNeural" `
+   -F "story=Hello from n8n.`nThis is a test." `
+-  -F "type=roblox" `
++  -F "type=single" `
+   -F "pitch=15" `
+   -F "speed=130" `
+   -F "video_speed=100" `
+   -F "media=@$video"
+ $create
+ $id = ($create | ConvertFrom-Json).id
+ 
+ do {
+   Start-Sleep -Seconds 2
+   $status = curl.exe -s "$base/api/v1/videos/$id" -H "X-API-Key: $apiKey" | ConvertFrom-Json
+@@ -137,21 +146,21 @@ curl.exe -s -L "$base/api/v1/videos/$id/download" -H "X-API-Key: $apiKey" -o ".\
+ Write-Host "saved out-$id.mp4"
+ ```
+ 
+ Library name instead of upload (no `media` file):
+ 
+ ```powershell
+ curl.exe -s -X POST "http://127.0.0.1:8000/api/v1/videos" `
+   -H "X-API-Key: your-key" `
+   -F "voice=en-US-EmmaNeural" `
+   -F "story=Hello.`nWorld." `
+-  -F "type=roblox" `
++  -F "type=single" `
+   -F "source_name=gameplay-1.mp4"
+ ```
+ 
+ ### Docker
+ 
+ Create a `.env` file (or export vars in your shell):
+ 
+ ```bash
+ APP_PASSWORD=your-password
+ APP_SECRET=your-long-random-secret
+diff --git a/scripts/test-n8n-api.ps1 b/scripts/test-n8n-api.ps1
+index 56e959e..c1ca5e3 100644
+--- a/scripts/test-n8n-api.ps1
++++ b/scripts/test-n8n-api.ps1
+@@ -1,20 +1,20 @@
+ # n8n / local API test (Windows PowerShell 5.1 + curl.exe)
+ $apiKey = "your-key-from-.env"   # paste API_KEY from .env
+ $base   = "http://127.0.0.1:8000"
+ $video  = "C:\path\to\your.mp4"  # change this
+ 
+ $createJson = curl.exe -s -X POST "$base/api/v1/videos" `
+   -H "X-API-Key: $apiKey" `
+   -F "voice=en-US-EmmaNeural" `
+   -F "story=Hello from n8n.`nThis is a test." `
+-  -F "type=roblox" `
++  -F "type=single" `
+   -F "pitch=15" `
+   -F "speed=130" `
+   -F "video_speed=100" `
+   -F "media=@$video"
+ 
+ Write-Host "create: $createJson"
+ $create = $createJson | ConvertFrom-Json
+ if (-not $create.id) { throw "Create failed: $createJson" }
+ $id = $create.id
+ Write-Host "id=$id"
+diff --git a/src/roblox_viral/reddit_clips.py b/src/roblox_viral/reddit_clips.py
+new file mode 100644
+index 0000000..2769628
+--- /dev/null
++++ b/src/roblox_viral/reddit_clips.py
+@@ -0,0 +1,62 @@
++"""Plan reddit background clips by shuffling source videos."""
++
++from __future__ import annotations
++
++import random
++from dataclasses import dataclass
++from pathlib import Path
++
++from roblox_viral.render import probe_duration_seconds
++
++_EPSILON = 1e-6
++
++
++@dataclass(frozen=True)
++class ClipSegment:
++    path: Path
++    start_s: float  # always 0 for v1
++    duration_s: float
++
++
++def _duration_for(path: Path, durations: dict[Path, float] | None) -> float:
++    if durations is not None:
++        return durations[path]
++    return probe_duration_seconds(path)
++
++
++def plan_reddit_clips(
++    paths: list[Path],
++    target_seconds: float,
++    *,
++    durations: dict[Path, float] | None = None,
++    rng: random.Random | None = None,
++) -> list[ClipSegment]:
++    """
++    Shuffle without replacement; reshuffle when exhausted; trim last segment.
++
++    durations: optional map path→seconds (tests inject; production uses probe).
++    Raise ValueError if paths empty or target_seconds <= 0.
++    """
++    if not paths or target_seconds <= 0:
++        raise ValueError("paths must be non-empty and target_seconds must be positive")
++
++    rng = rng or random.Random()
++    remaining = target_seconds
++    out: list[ClipSegment] = []
++    bag: list[Path] = []
++
++    while remaining > _EPSILON:
++        if not bag:
++            bag = list(paths)
++            rng.shuffle(bag)
++
++        path = bag.pop()
++        duration = _duration_for(path, durations)
++        if duration <= 0:
++            raise ValueError(f"duration must be positive for {path}")
++
++        use = min(duration, remaining)
++        out.append(ClipSegment(path=path, start_s=0.0, duration_s=use))
++        remaining -= use
++
++    return out
+diff --git a/src/roblox_viral/render.py b/src/roblox_viral/render.py
+index 4b02e5e..5afa43a 100644
+--- a/src/roblox_viral/render.py
++++ b/src/roblox_viral/render.py
+@@ -1,26 +1,31 @@
+ """ffmpeg-based video render: loop, crop to 9:16, burn captions, mux TTS."""
+ 
+ from __future__ import annotations
+ 
+ import json
+ import shutil
+ import subprocess
+ from pathlib import Path
++from typing import TYPE_CHECKING
+ 
+ from roblox_viral.voice import validate_video_speed
+ 
++if TYPE_CHECKING:
++    from roblox_viral.reddit_clips import ClipSegment
++
+ 
+ OUTPUT_WIDTH = 1080
+ OUTPUT_HEIGHT = 1920
+ OVERLAY_DURATION_S = 3.5
+-OVERLAY_HEIGHT = OUTPUT_HEIGHT // 2
++OVERLAY_MAX_W = OUTPUT_WIDTH
++OVERLAY_MAX_H = OUTPUT_HEIGHT
+ OVERLAY_CHROMA_COLOR = "0x00FE00"
+ OVERLAY_CHROMA_SIMILARITY = "0.30"
+ OVERLAY_CHROMA_BLEND = "0.10"
+ 
+ KEN_BURNS_ZOOM = 1.20
+ KEN_BURNS_FPS = 30
+ 
+ 
+ class RenderError(RuntimeError):
+     """Raised when ffmpeg/ffprobe fails or is missing."""
+@@ -63,20 +68,83 @@ def probe_duration_seconds(media_path: Path | str) -> float:
+     except subprocess.CalledProcessError as exc:
+         raise RenderError(f"ffprobe failed for {media_path}: {exc.stderr}") from exc
+ 
+     data = json.loads(result.stdout or "{}")
+     duration = float(data.get("format", {}).get("duration", 0) or 0)
+     if duration <= 0:
+         raise RenderError(f"Could not determine duration for {media_path}")
+     return duration
+ 
+ 
++def build_reddit_background(
++    segments: list[ClipSegment],
++    output_path: Path,
++    *,
++    work_dir: Path | None = None,
++) -> Path:
++    """Trim and concatenate reddit clip segments into a silent video."""
++    if not segments:
++        raise RenderError("Cannot build reddit background without clip segments")
++
++    ffmpeg = require_ffmpeg()
++    out = Path(output_path)
++    out.parent.mkdir(parents=True, exist_ok=True)
++    if work_dir is not None:
++        Path(work_dir).mkdir(parents=True, exist_ok=True)
++
++    cmd = [ffmpeg, "-y"]
++    filter_parts = []
++    concat_inputs = []
++    for index, segment in enumerate(segments):
++        cmd.extend(
++            [
++                "-ss",
++                f"{segment.start_s:.3f}",
++                "-t",
++                f"{segment.duration_s:.3f}",
++                "-i",
++                str(segment.path),
++            ]
++        )
++        label = f"v{index}"
++        filter_parts.append(f"[{index}:v]setpts=PTS-STARTPTS[{label}]")
++        concat_inputs.append(f"[{label}]")
++
++    filter_parts.append(
++        "".join(concat_inputs) + f"concat=n={len(segments)}:v=1:a=0[outv]"
++    )
++    cmd.extend(
++        [
++            "-filter_complex",
++            ";".join(filter_parts),
++            "-map",
++            "[outv]",
++            "-c:v",
++            "libx264",
++            "-pix_fmt",
++            "yuv420p",
++            "-an",
++            "-movflags",
++            "+faststart",
++            str(out),
++        ]
++    )
++
++    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
++    if result.returncode != 0:
++        raise RenderError(
++            "ffmpeg reddit background concat failed:\n"
++            + (result.stderr[-2000:] if result.stderr else "no stderr")
++        )
++    return out
++
++
+ def _ass_filter_path(ass_path: Path) -> str:
+     """Escape path for ffmpeg ass filter (Windows-safe)."""
+     p = ass_path.resolve().as_posix()
+     p = p.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+     return p
+ 
+ 
+ def _playback_setpts(video_speed: int) -> str | None:
+     validate_video_speed(video_speed)
+     if video_speed == 100:
+@@ -92,21 +160,21 @@ def render_video(
+     output_path: Path | str,
+     keep_temp: bool = False,
+     work_dir: Path | str | None = None,
+     overlay_path: Path | str | None = None,
+     video_speed: int = 100,
+ ) -> Path:
+     """
+     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
+ 
+     When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
+-    composite it centered (half frame height) over captions at the start.
++    composite it centered (fit inside full frame) over captions at the start.
+ 
+     Original video audio is discarded by mapping only the TTS audio stream.
+     Intermediate files live under work_dir when provided; otherwise only final out is kept
+     unless keep_temp is True (work_dir is then left for the caller).
+     """
+     del keep_temp  # reserved for CLI temp-dir lifecycle; render itself writes only `out`
+     ffmpeg = require_ffmpeg()
+     video = Path(video_path)
+     audio = Path(audio_path)
+     ass = Path(ass_path)
+@@ -179,21 +247,21 @@ def render_video(
+             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+         ]
+         if setpts:
+             base_parts.append(setpts)
+         base = ",".join(base_parts)
+         fc = (
+             f"[0:v]{base}[base];"
+             f"[base]ass='{ass_escaped}'[cap];"
+             f"[2:v]chromakey={OVERLAY_CHROMA_COLOR}:{OVERLAY_CHROMA_SIMILARITY}:{OVERLAY_CHROMA_BLEND},"
+-            f"format=yuva420p,scale=-2:{OVERLAY_HEIGHT}[ov];"
++            f"format=yuva420p,scale={OVERLAY_MAX_W}:{OVERLAY_MAX_H}:force_original_aspect_ratio=decrease[ov];"
+             f"[cap][ov]overlay=(W-w)/2:(H-h)/2:enable='lte(t,{OVERLAY_DURATION_S})':eof_action=pass[outv]"
+         )
+         cmd = [
+             ffmpeg,
+             "-y",
+             "-stream_loop",
+             "-1",
+             "-i",
+             str(video),
+             "-i",
+diff --git a/src/roblox_viral/web/api_v1.py b/src/roblox_viral/web/api_v1.py
+index 6ace8de..99382e2 100644
+--- a/src/roblox_viral/web/api_v1.py
++++ b/src/roblox_viral/web/api_v1.py
+@@ -26,25 +26,29 @@ from roblox_viral.voice import (
+ from roblox_viral.web import library as library_mod
+ from roblox_viral.web.auth import require_api_key
+ from roblox_viral.web.jobs import BusyError, JobManager
+ from roblox_viral.web.voices import DEFAULT_VOICE
+ 
+ router = APIRouter(prefix="/api/v1", tags=["v1"])
+ 
+ 
+ def _mode_from_type(video_type: str) -> str:
+     t = (video_type or "").strip().lower()
+-    if t == "roblox":
+-        return "roblox"
++    if t == "single":
++        return "single"
++    if t == "reddit":
++        return "reddit"
+     if t == "leni":
+         return "picture"
+-    raise ValueError("type must be 'roblox' or 'leni'")
++    if t == "roblox":
++        raise ValueError("type 'roblox' is removed; use 'single'")
++    raise ValueError("type must be 'single', 'reddit', or 'leni'")
+ 
+ 
+ def _optional_int(raw: str | None, default: int, label: str) -> int:
+     if raw is None or str(raw).strip() == "":
+         return default
+     try:
+         return int(str(raw).strip())
+     except ValueError as exc:
+         raise ValueError(f"{label} must be an int") from exc
+ 
+@@ -65,47 +69,53 @@ async def create_video(
+ ) -> dict:
+     settings = request.app.state.settings
+     mgr: JobManager = request.app.state.job_manager
+     try:
+         mode = _mode_from_type(type)
+     except ValueError as exc:
+         raise HTTPException(status_code=400, detail=str(exc)) from exc
+ 
+     has_media = media is not None and bool(getattr(media, "filename", None))
+     name = (source_name or "").strip()
+-    if has_media and name:
++    if mode == "reddit":
++        if has_media:
++            raise HTTPException(
++                status_code=400,
++                detail="reddit type does not accept media",
++            )
++    elif has_media and name:
+         raise HTTPException(
+             status_code=400,
+             detail="Provide either media file or source_name, not both",
+         )
+-    if not has_media and not name:
++    elif not has_media and not name:
+         raise HTTPException(
+             status_code=400,
+             detail="Provide media file or source_name",
+         )
+ 
+     voice_s = (voice or "").strip() or DEFAULT_VOICE
+     try:
+         pitch_i = _optional_int(pitch, DEFAULT_PITCH, "pitch")
+         speed_i = _optional_int(speed, DEFAULT_SPEED, "speed")
+         video_speed_i = _optional_int(
+             video_speed, DEFAULT_VIDEO_SPEED, "video_speed"
+         )
+         format_edge_pitch(pitch_i)
+         format_edge_rate(speed_i)
+         validate_video_speed(video_speed_i)
+     except ValueError as exc:
+         raise HTTPException(status_code=400, detail=str(exc)) from exc
+ 
+     ephemeral = False
+     input_bytes: bytes | None = None
+-    stored_name = name
++    stored_name = "" if mode == "reddit" else name
+ 
+     if has_media:
+         assert media is not None
+         raw_name = Path(media.filename or "upload.bin").name
+         data = await media.read()
+         try:
+             if mode == "picture":
+                 if len(data) > library_mod.MAX_IMAGE_UPLOAD_BYTES:
+                     raise ValueError(
+                         f"Upload exceeds maximum size of "
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index fa77a2e..391d240 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -27,29 +27,28 @@ from roblox_viral.voice import (
+     DEFAULT_SPEED,
+     DEFAULT_VIDEO_SPEED,
+     format_edge_pitch,
+     format_edge_rate,
+     validate_video_speed,
+ )
+ from roblox_viral.web.api_v1 import router as api_v1_router
+ from roblox_viral.web.auth import require_login, set_authenticated
+ from roblox_viral.web.config import Settings, get_settings
+ from roblox_viral.web.gemini import generate_story
+-from roblox_viral.web.jobs import BusyError, JobManager
++from roblox_viral.web.jobs import BusyError, JobManager, normalize_mode
+ from roblox_viral.web import library as library_mod
+ from roblox_viral.web.library import (
+     delete_image,
+     delete_source,
+     delete_video,
+     list_images,
+     list_outputs,
+-    list_roblox_sources,
+     list_sources,
+     list_videos,
+     save_image,
+     save_upload,
+     save_video,
+ )
+ from roblox_viral.web.prompt import load_prompt, save_prompt
+ from roblox_viral.web.voices import DEFAULT_VOICE, VoiceInfo, list_english_voices
+ 
+ WEB_DIR = Path(__file__).resolve().parent
+@@ -77,21 +76,21 @@ def _library_ctx(
+     }
+ 
+ 
+ class CreateJobBody(BaseModel):
+     source_name: str = ""
+     story: str = ""
+     voice: str | None = None
+     pitch: int | None = None
+     speed: int | None = None
+     video_speed: int | None = None
+-    mode: str = "roblox"
++    mode: str = "single"
+     ken_burns: bool = False
+ 
+ 
+ async def _read_upload_capped(
+     file: UploadFile, max_bytes: int | None = None
+ ) -> bytes:
+     limit = library_mod.MAX_UPLOAD_BYTES if max_bytes is None else max_bytes
+     chunks: list[bytes] = []
+     total = 0
+     while True:
+@@ -158,30 +157,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+     def logout(request: Request) -> RedirectResponse:
+         set_authenticated(request, False)
+         return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
+ 
+     @app.get("/", response_class=HTMLResponse)
+     async def generate_page(
+         request: Request,
+         _: None = Depends(require_login),
+     ) -> HTMLResponse:
+         settings = request.app.state.settings
+-        sources = list_roblox_sources(settings)
++        sources = list_sources(settings)
++        videos = list_videos(settings)
+         try:
+             voices = await list_english_voices()
+         except Exception:
+             voices = [VoiceInfo(DEFAULT_VOICE, "en-US", "Female")]
+         return templates.TemplateResponse(
+             request,
+             "generate.html",
+             {
+                 "sources": sources,
++                "videos": videos,
++                "has_videos": bool(videos),
+                 "voices": voices,
+                 "default_voice": DEFAULT_VOICE,
+                 "recent_outputs": list_outputs(settings),
+                 "images": list_images(settings),
+             },
+         )
+ 
+     @app.get("/library", response_class=HTMLResponse)
+     def library_page(
+         request: Request,
+@@ -412,32 +414,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+         voice = body.voice or DEFAULT_VOICE
+         pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
+         speed = DEFAULT_SPEED if body.speed is None else body.speed
+         video_speed = (
+             DEFAULT_VIDEO_SPEED if body.video_speed is None else body.video_speed
+         )
+         try:
+             format_edge_pitch(pitch)
+             format_edge_rate(speed)
+             validate_video_speed(video_speed)
++            mode = normalize_mode(body.mode)
+         except ValueError as exc:
+             raise HTTPException(status_code=400, detail=str(exc)) from exc
+         try:
+             record = mgr.create(
+                 settings,
+                 source_name,
+                 story,
+                 voice,
+                 pitch=pitch,
+                 speed=speed,
+                 video_speed=video_speed,
+-                mode=body.mode,
++                mode=mode,
+                 ken_burns=body.ken_burns,
+             )
+         except BusyError as exc:
+             raise HTTPException(
+                 status_code=HTTP_409_CONFLICT,
+                 detail=str(exc),
+             ) from exc
+         except (ValueError, FileNotFoundError) as exc:
+             raise HTTPException(status_code=400, detail=str(exc)) from exc
+         background_tasks.add_task(mgr.run_job, settings, record.id)
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index f8c84b2..0f2ecbf 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -4,71 +4,85 @@ import json
+ import re
+ import threading
+ import uuid
+ from dataclasses import asdict, dataclass
+ from datetime import datetime, timezone
+ from typing import Literal
+ 
+ from pathlib import Path
+ 
+ from roblox_viral.captions import write_ass
+-from roblox_viral.render import render_still, render_video
++from roblox_viral.reddit_clips import plan_reddit_clips
++from roblox_viral.render import (
++    build_reddit_background,
++    probe_duration_seconds,
++    render_still,
++    render_video,
++)
+ from roblox_viral.story import join_for_tts, split_sentences
+ from roblox_viral.voice import (
+     DEFAULT_PITCH,
+     DEFAULT_SPEED,
+     DEFAULT_VIDEO_SPEED,
+     EdgeTTSProvider,
+     format_edge_pitch,
+     format_edge_rate,
+     validate_video_speed,
+ )
+ from roblox_viral.web.config import Settings
+ from roblox_viral.web.library import (
++    list_videos,
+     make_output_name,
+     resolve_image,
+-    resolve_roblox_media,
++    resolve_source,
+     validate_image_filename,
+     validate_video_filename,
+ )
+ 
+ JobStatus = Literal[
+     "queued",
+     "synthesizing",
+     "captioning",
+     "rendering",
+     "done",
+     "error",
+ ]
+ 
+ # uuid4().hex — reject path traversal / odd filenames
+ _SAFE_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
+ 
+ 
++def normalize_mode(mode: str) -> str:
++    normalized = "single" if mode == "roblox" else mode
++    if normalized not in ("single", "picture", "reddit"):
++        raise ValueError(f"Invalid mode: {mode!r}")
++    return normalized
++
++
+ class BusyError(Exception):
+     """Raised when a job is already active (single-flight)."""
+ 
+ 
+ @dataclass
+ class JobRecord:
+     id: str
+     status: JobStatus
+     error: str | None
+     source_name: str
+     voice: str
+     output_name: str | None
+     created_at: str
+     kind: str = "render"
+     pitch: int = DEFAULT_PITCH
+     speed: int = DEFAULT_SPEED
+     video_speed: int = DEFAULT_VIDEO_SPEED
+-    mode: str = "roblox"  # "roblox" | "picture"
++    mode: str = "single"  # "single" | "picture" | "reddit"
+     ken_burns: bool = False
+     url: str | None = None
+     stem: str | None = None
+     created_slices: list[str] | None = None
+     ephemeral: bool = False
+ 
+ 
+ class JobManager:
+     """In-memory job store with single-flight pipeline execution."""
+ 
+@@ -80,42 +94,47 @@ class JobManager:
+ 
+     def create(
+         self,
+         settings: Settings,
+         source_name: str,
+         story: str,
+         voice: str,
+         pitch: int = DEFAULT_PITCH,
+         speed: int = DEFAULT_SPEED,
+         video_speed: int = DEFAULT_VIDEO_SPEED,
+-        mode: str = "roblox",
++        mode: str = "single",
+         ken_burns: bool = False,
+         ephemeral: bool = False,
+     ) -> JobRecord:
+         format_edge_pitch(pitch)
+         format_edge_rate(speed)
+         validate_video_speed(video_speed)
+-        if mode not in ("roblox", "picture"):
+-            raise ValueError(f"Invalid mode: {mode!r}")
+-        if ephemeral:
++        mode = normalize_mode(mode)
++        if mode == "reddit":
++            if not list_videos(settings):
++                raise ValueError("Reddit mode requires at least one video")
++            source_name = source_name or "reddit"
++            ken_burns = False
++            ephemeral = False
++        elif ephemeral:
+             safe = Path(source_name).name
+             if safe != source_name or not safe:
+                 raise ValueError("Invalid source_name")
+             if mode == "picture":
+                 source_name = validate_image_filename(safe)
+             else:
+                 source_name = validate_video_filename(safe)
+                 ken_burns = False
+         elif mode == "picture":
+             resolve_image(settings, source_name)
+         else:
+-            resolve_roblox_media(settings, source_name)
++            resolve_source(settings, source_name)
+             ken_burns = False
+         sentences = split_sentences(story)
+         if not sentences:
+             raise ValueError("Story is empty")
+ 
+         with self._lock:
+             if self._active_id is not None:
+                 raise BusyError("A job is already in progress")
+             job_id = uuid.uuid4().hex
+             record = JobRecord(
+@@ -174,21 +193,21 @@ class JobManager:
+                 source_name=str(data.get("source_name") or ""),
+                 voice=str(data.get("voice") or ""),
+                 output_name=data.get("output_name"),
+                 created_at=str(data["created_at"]),
+                 kind=str(data.get("kind") or "render"),
+                 pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
+                 speed=int(data["speed"]) if "speed" in data else DEFAULT_SPEED,
+                 video_speed=int(data["video_speed"])
+                 if "video_speed" in data
+                 else DEFAULT_VIDEO_SPEED,
+-                mode=str(data.get("mode") or "roblox"),
++                mode=normalize_mode(str(data.get("mode") or "single")),
+                 ken_burns=bool(data.get("ken_burns", False)),
+                 url=data.get("url"),
+                 stem=data.get("stem"),
+                 created_slices=data.get("created_slices"),
+                 ephemeral=bool(data.get("ephemeral", False)),
+             )
+         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+             return None
+ 
+         if record.id != job_id or not _SAFE_JOB_ID.fullmatch(record.id):
+@@ -209,21 +228,21 @@ class JobManager:
+         try:
+             story = self._stories[job_id]
+             sentences = split_sentences(story)
+             if not sentences:
+                 raise ValueError("Story is empty")
+ 
+             job_dir = settings.jobs_dir / job_id
+             job_dir.mkdir(parents=True, exist_ok=True)
+             narration_path = job_dir / "narration.mp3"
+             ass_path = job_dir / "captions.ass"
+-            output_name = make_output_name(record.source_name)
++            output_name = make_output_name(record.source_name or "reddit")
+             output_path = settings.outputs_dir / output_name
+ 
+             self._set_status(settings, record, "synthesizing")
+             words = EdgeTTSProvider(
+                 record.voice,
+                 rate=format_edge_rate(record.speed),
+                 pitch=format_edge_pitch(record.pitch),
+             ).synthesize(join_for_tts(sentences), narration_path)
+ 
+             self._set_status(settings, record, "captioning")
+@@ -232,22 +251,40 @@ class JobManager:
+             self._set_status(settings, record, "rendering")
+             if record.ephemeral:
+                 media_path = (job_dir / record.source_name).resolve()
+                 if (
+                     not media_path.is_relative_to(job_dir.resolve())
+                     or not media_path.is_file()
+                 ):
+                     raise FileNotFoundError(record.source_name)
+             elif record.mode == "picture":
+                 media_path = resolve_image(settings, record.source_name)
++            elif record.mode == "reddit":
++                videos = [video.path for video in list_videos(settings)]
++                durations = {
++                    video_path: probe_duration_seconds(video_path)
++                    for video_path in videos
++                }
++                narration_duration = probe_duration_seconds(narration_path)
++                segments = plan_reddit_clips(
++                    videos,
++                    narration_duration,
++                    durations=durations,
++                )
++                media_path = job_dir / "reddit_bg.mp4"
++                build_reddit_background(
++                    segments,
++                    media_path,
++                    work_dir=job_dir,
++                )
+             else:
+-                media_path = resolve_roblox_media(settings, record.source_name)
++                media_path = resolve_source(settings, record.source_name)
+ 
+             if record.mode == "picture":
+                 render_still(
+                     image_path=media_path,
+                     audio_path=narration_path,
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     ken_burns=record.ken_burns,
+                     work_dir=job_dir,
+                 )
+diff --git a/src/roblox_viral/web/static/app.js b/src/roblox_viral/web/static/app.js
+index 5c77256..8954eb9 100644
+--- a/src/roblox_viral/web/static/app.js
++++ b/src/roblox_viral/web/static/app.js
+@@ -62,51 +62,75 @@
+     }
+   }
+   if (pitchInput && speedInput) {
+     pitchInput.addEventListener("input", syncVoiceSliders);
+     speedInput.addEventListener("input", syncVoiceSliders);
+     if (videoSpeedInput) videoSpeedInput.addEventListener("input", syncVoiceSliders);
+     syncVoiceSliders();
+   }
+ 
+   const generateBtn = document.getElementById("generate-btn");
+-  const tabRoblox = document.getElementById("tab-roblox");
+-  const tabPicture = document.getElementById("tab-picture");
+-  const robloxBlock = document.getElementById("roblox-source-block");
++  const modeTabs = [...form.querySelectorAll('[role="tab"][data-mode]')];
++  const singleBlock = document.getElementById("single-source-block");
+   const pictureBlock = document.getElementById("picture-source-block");
++  const redditBlock = document.getElementById("reddit-source-block");
+   const sourceSelect = document.getElementById("source_name");
+   const imageSelect = document.getElementById("image_name");
+   const kenBurnsEl = document.getElementById("ken_burns");
+-  let currentMode = "roblox";
++  const hasVideos = form.dataset.hasVideos === "true";
++  let currentMode = "single";
+   function imageSelectHasValue() {
+     return Boolean(imageSelect && imageSelect.value);
+   }
+   function syncGenerateEnabled() {
+     if (!generateBtn) return;
+     if (currentMode === "picture") {
+       generateBtn.disabled = !imageSelectHasValue();
++    } else if (currentMode === "reddit") {
++      generateBtn.disabled = !hasVideos;
+     } else {
+       generateBtn.disabled = !(sourceSelect && sourceSelect.value);
+     }
+   }
+   function setMode(mode) {
+     currentMode = mode;
+     const isPicture = mode === "picture";
+-    if (robloxBlock) robloxBlock.hidden = isPicture;
++    if (singleBlock) singleBlock.hidden = mode !== "single";
+     if (pictureBlock) pictureBlock.hidden = !isPicture;
++    if (redditBlock) redditBlock.hidden = mode !== "reddit";
+     if (videoSpeedField) videoSpeedField.hidden = isPicture;
+-    if (tabRoblox) tabRoblox.setAttribute("aria-selected", isPicture ? "false" : "true");
+-    if (tabPicture) tabPicture.setAttribute("aria-selected", isPicture ? "true" : "false");
++    for (const tab of modeTabs) {
++      const selected = tab.dataset.mode === mode;
++      tab.setAttribute("aria-selected", String(selected));
++      tab.tabIndex = selected ? 0 : -1;
++    }
+     syncGenerateEnabled();
+   }
+-  if (tabRoblox) tabRoblox.addEventListener("click", () => setMode("roblox"));
+-  if (tabPicture) tabPicture.addEventListener("click", () => setMode("picture"));
++  for (const tab of modeTabs) {
++    tab.addEventListener("click", () => setMode(tab.dataset.mode));
++    tab.addEventListener("keydown", (event) => {
++      const currentIndex = modeTabs.indexOf(tab);
++      let nextIndex;
++      if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % modeTabs.length;
++      if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + modeTabs.length) % modeTabs.length;
++      if (event.key === "Home") nextIndex = 0;
++      if (event.key === "End") nextIndex = modeTabs.length - 1;
++      if (nextIndex === undefined) return;
++      event.preventDefault();
++      const nextTab = modeTabs[nextIndex];
++      setMode(nextTab.dataset.mode);
++      nextTab.focus();
++    });
++  }
++  if (sourceSelect) sourceSelect.addEventListener("change", syncGenerateEnabled);
++  if (imageSelect) imageSelect.addEventListener("change", syncGenerateEnabled);
++  syncGenerateEnabled();
+ 
+   const statusEl = document.getElementById("status");
+   const errorEl = document.getElementById("error");
+   const resultEl = document.getElementById("result");
+   const player = document.getElementById("player");
+   const download = document.getElementById("download");
+ 
+   let pollTimer = null;
+ 
+   function setStatus(text) {
+@@ -173,46 +197,48 @@
+     const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {
+       headers: { Accept: "application/json" },
+     });
+     if (!res.ok) {
+       throw new Error(`Status request failed (${res.status})`);
+     }
+     const job = await res.json();
+     setStatus(job.status);
+     if (job.status === "done") {
+       stopPolling();
+-      generateBtn.disabled = false;
++      syncGenerateEnabled();
+       if (job.output_name) {
+         showResult(job.output_name);
+       }
+       return;
+     }
+     if (job.status === "error") {
+       stopPolling();
+-      generateBtn.disabled = false;
++      syncGenerateEnabled();
+       showError(job.error || "Render failed");
+     }
+   }
+ 
+   form.addEventListener("submit", async (event) => {
+     event.preventDefault();
+     clearError();
+     resultEl.hidden = true;
+     player.removeAttribute("src");
+     stopPolling();
+ 
+     const payload = {
+       mode: currentMode,
+       source_name:
+         currentMode === "picture"
+           ? document.getElementById("image_name").value
+-          : document.getElementById("source_name").value,
++          : currentMode === "single"
++            ? document.getElementById("source_name").value
++            : "",
+       story: document.getElementById("story").value,
+       voice: document.getElementById("voice").value,
+       pitch: Number(document.getElementById("pitch").value),
+       speed: Number(document.getElementById("speed").value),
+       video_speed: Number(document.getElementById("video_speed").value),
+       ken_burns:
+         currentMode === "picture" &&
+         Boolean(document.getElementById("ken_burns") && document.getElementById("ken_burns").checked),
+     };
+ 
+@@ -223,37 +249,37 @@
+       const res = await fetch("/api/jobs", {
+         method: "POST",
+         headers: {
+           "Content-Type": "application/json",
+           Accept: "application/json",
+         },
+         body: JSON.stringify(payload),
+       });
+       const body = await res.json().catch(() => ({}));
+       if (res.status === 409) {
+-        generateBtn.disabled = false;
++        syncGenerateEnabled();
+         setStatus("busy");
+         showError(body.detail || "A job is already in progress");
+         return;
+       }
+       if (!res.ok) {
+-        generateBtn.disabled = false;
++        syncGenerateEnabled();
+         setStatus("error");
+         showError(body.detail || `Create failed (${res.status})`);
+         return;
+       }
+       setStatus(body.status || "queued");
+       pollTimer = setInterval(() => {
+         pollJob(body.id).catch((err) => {
+           stopPolling();
+-          generateBtn.disabled = false;
++          syncGenerateEnabled();
+           showError(err.message || String(err));
+         });
+       }, 1000);
+       await pollJob(body.id);
+     } catch (err) {
+-      generateBtn.disabled = false;
++      syncGenerateEnabled();
+       setStatus("error");
+       showError(err.message || String(err));
+     }
+   });
+ })();
+diff --git a/src/roblox_viral/web/templates/generate.html b/src/roblox_viral/web/templates/generate.html
+index 230c5fa..d0b92f2 100644
+--- a/src/roblox_viral/web/templates/generate.html
++++ b/src/roblox_viral/web/templates/generate.html
+@@ -1,56 +1,61 @@
+ {% extends "base.html" %}
+-{% block title %}Generate — Roblox Viral{% endblock %}
++{% block title %}Generate — Viral Studio{% endblock %}
+ {% block content %}
+   <h1>Generate</h1>
+-  <p class="lede">Pick a Roblox clip or a still image, paste a story (one sentence per line), choose a voice.</p>
++  <p class="lede">Choose a background mode, paste a story (one sentence per line), and select a voice.</p>
+ 
+-  <form id="generate-form" class="generate-form">
+-    <div class="mode-tabs" role="tablist">
+-      <button type="button" role="tab" id="tab-roblox" data-mode="roblox" aria-selected="true">Roblox</button>
+-      <button type="button" role="tab" id="tab-picture" data-mode="picture" aria-selected="false">Picture</button>
++  <form id="generate-form" class="generate-form" data-has-videos="{{ 'true' if has_videos else 'false' }}">
++    <div class="mode-tabs" role="tablist" aria-label="Background mode">
++      <button type="button" role="tab" id="tab-single" data-mode="single" aria-controls="single-source-block" aria-selected="true" tabindex="0">Single background video</button>
++      <button type="button" role="tab" id="tab-picture" data-mode="picture" aria-controls="picture-source-block" aria-selected="false" tabindex="-1">Picture</button>
++      <button type="button" role="tab" id="tab-reddit" data-mode="reddit" aria-controls="reddit-source-block" aria-selected="false" tabindex="-1">Reddit</button>
+     </div>
+ 
+-    <div id="roblox-source-block">
++    <div id="single-source-block" role="tabpanel" aria-labelledby="tab-single">
+       <label>
+         Source video
+         <select id="source_name" name="source_name">
+           {% if not sources %}
+           <option value="" disabled selected>No sources — upload in Library</option>
+           {% else %}
+           {% for s in sources %}
+-          <option value="{{ s.name }}">{{ s.name }} {% if s.kind == "slice" %}(1m){% else %}(video){% endif %}</option>
++          <option value="{{ s.name }}">{{ s.name }} (1m)</option>
+           {% endfor %}
+           {% endif %}
+         </select>
+       </label>
+     </div>
+ 
+-    <div id="picture-source-block" hidden>
++    <div id="picture-source-block" role="tabpanel" aria-labelledby="tab-picture" hidden>
+       <label>
+         Source image
+         <select id="image_name" name="image_name">
+           {% if not images %}
+           <option value="" disabled selected>No images — upload in Library</option>
+           {% else %}
+           {% for img in images %}
+           <option value="{{ img.name }}">{{ img.name }}</option>
+           {% endfor %}
+           {% endif %}
+         </select>
+       </label>
+       <label class="checkbox-field">
+         <input id="ken_burns" name="ken_burns" type="checkbox">
+         Ken Burns (slow zoom-in)
+       </label>
+     </div>
+ 
++    <div id="reddit-source-block" role="tabpanel" aria-labelledby="tab-reddit" hidden>
++      <p>Uses random clips from Library → Videos</p>
++    </div>
++
+     <label>
+       Story
+       <textarea id="story" name="story" rows="10" required placeholder="One sentence per line."></textarea>
+     </label>
+     <div class="story-actions">
+       <button id="generate-story-btn" type="button">Generate story</button>
+       <p id="story-gen-error" class="error" hidden></p>
+     </div>
+ 
+     <label>
+diff --git a/tests/test_reddit_clips.py b/tests/test_reddit_clips.py
+new file mode 100644
+index 0000000..df1ad76
+--- /dev/null
++++ b/tests/test_reddit_clips.py
+@@ -0,0 +1,29 @@
++"""Tests for reddit clip planning."""
++
++import random
++from pathlib import Path
++
++import pytest
++
++from roblox_viral.reddit_clips import plan_reddit_clips
++
++
++def test_plan_trims_last_clip():
++    paths = [Path("a.mp4"), Path("b.mp4")]
++    durs = {paths[0]: 10.0, paths[1]: 10.0}
++    rng = random.Random(0)
++    segs = plan_reddit_clips(paths, 15.0, durations=durs, rng=rng)
++    assert abs(sum(s.duration_s for s in segs) - 15.0) < 1e-6
++    assert segs[-1].duration_s < 10.0 or len(segs) == 2
++
++
++def test_plan_reshuffles_when_exhausted():
++    p = Path("only.mp4")
++    segs = plan_reddit_clips([p], 25.0, durations={p: 10.0}, rng=random.Random(1))
++    assert len(segs) == 3
++    assert abs(sum(s.duration_s for s in segs) - 25.0) < 1e-6
++
++
++def test_plan_empty_pool_errors():
++    with pytest.raises(ValueError):
++        plan_reddit_clips([], 10.0, durations={})
+diff --git a/tests/test_render.py b/tests/test_render.py
+index 6c4e825..2e3bb19 100644
+--- a/tests/test_render.py
++++ b/tests/test_render.py
+@@ -1,15 +1,21 @@
+ from pathlib import Path
+ 
+ import pytest
+ 
+-from roblox_viral.render import RenderError, render_still, render_video
++from roblox_viral.reddit_clips import ClipSegment
++from roblox_viral.render import (
++    RenderError,
++    build_reddit_background,
++    render_still,
++    render_video,
++)
+ 
+ 
+ def _touch(path: Path, data: bytes = b"x") -> Path:
+     path.parent.mkdir(parents=True, exist_ok=True)
+     path.write_bytes(data)
+     return path
+ 
+ 
+ def test_render_video_without_overlay_uses_vf(tmp_path, monkeypatch):
+     video = _touch(tmp_path / "game.mp4")
+@@ -300,10 +306,121 @@ def test_render_video_overlay_includes_setpts_on_base(tmp_path, monkeypatch):
+         video_path=video,
+         audio_path=audio,
+         ass_path=ass,
+         output_path=out,
+         overlay_path=overlay,
+         video_speed=150,
+     )
+     fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+     assert "setpts=100/150*PTS" in fc
+     assert "lte(t,3.5)" in fc
++
++
++def test_render_video_overlay_fits_full_frame(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    overlay = _touch(tmp_path / "overlay.mp4")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 5.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        overlay_path=overlay,
++    )
++    fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
++    assert f"scale=1080:1920:force_original_aspect_ratio=decrease" in fc
++    assert "scale=-2:" not in fc
++    assert "lte(t,3.5)" in fc
++
++
++def test_build_reddit_background_concats_trimmed_segments(tmp_path, monkeypatch):
++    first = _touch(tmp_path / "first.mp4")
++    second = _touch(tmp_path / "second.mp4")
++    out = tmp_path / "nested" / "background.mp4"
++    work_dir = tmp_path / "work"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++
++    result = build_reddit_background(
++        [
++            ClipSegment(path=first, start_s=1.25, duration_s=2.5),
++            ClipSegment(path=second, start_s=0.0, duration_s=3.75),
++        ],
++        out,
++        work_dir=work_dir,
++    )
++
++    assert result == out
++    assert out.is_file()
++    assert work_dir.is_dir()
++    cmd = seen["cmd"]
++    assert cmd.count("-i") == 2
++    assert str(first) in cmd
++    assert str(second) in cmd
++    assert cmd[cmd.index(str(first)) - 5 : cmd.index(str(first))] == [
++        "-ss",
++        "1.250",
++        "-t",
++        "2.500",
++        "-i",
++    ]
++    filter_complex = cmd[cmd.index("-filter_complex") + 1]
++    assert "[0:v]setpts=PTS-STARTPTS[v0]" in filter_complex
++    assert "[1:v]setpts=PTS-STARTPTS[v1]" in filter_complex
++    assert "[v0][v1]concat=n=2:v=1:a=0[outv]" in filter_complex
++    assert cmd[cmd.index("-map") + 1] == "[outv]"
++    assert cmd[cmd.index("-c:v") + 1] == "libx264"
++    assert "-an" in cmd
++
++
++def test_build_reddit_background_raises_render_error_on_ffmpeg_failure(
++    tmp_path, monkeypatch
++):
++    source = _touch(tmp_path / "source.mp4")
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        class R:
++            returncode = 1
++            stderr = "concat exploded"
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++
++    with pytest.raises(RenderError, match="concat exploded"):
++        build_reddit_background(
++            [ClipSegment(path=source, start_s=0.0, duration_s=1.0)],
++            tmp_path / "out.mp4",
++        )
+diff --git a/tests/web/test_api.py b/tests/web/test_api.py
+index 1d5c107..7ec475c 100644
+--- a/tests/web/test_api.py
++++ b/tests/web/test_api.py
+@@ -288,55 +288,144 @@ def test_generate_page_lists_sources_and_default_voice(tmp_path, monkeypatch):
+     _login(c)
+     _seed_source(c)
+ 
+     r = c.get("/")
+     assert r.status_code == 200
+     assert "clip.mp4" in r.text
+     assert "en-US-EmmaNeural" in r.text
+     assert 'selected' in r.text.lower() or "Emma" in r.text
+ 
+ 
+-def test_generate_page_has_picture_tab_controls(tmp_path, monkeypatch):
++def test_generate_page_has_three_mode_tab_controls(tmp_path, monkeypatch):
+     async def fake_voices():
+         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+ 
+     monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
+     _seed_source(c)
+ 
+     r_empty = c.get("/")
+     assert r_empty.status_code == 200
+     assert "No images — upload in Library" in r_empty.text
+     assert "upload below" not in r_empty.text.lower()
+ 
+     settings = c.app.state.settings
+     settings.images_dir.mkdir(parents=True, exist_ok=True)
+     (settings.images_dir / "still.jpg").write_bytes(b"img")
+     r = c.get("/")
+     assert r.status_code == 200
+-    assert 'id="tab-roblox"' in r.text
++    assert 'id="tab-single"' in r.text
+     assert 'id="tab-picture"' in r.text
++    assert 'id="tab-reddit"' in r.text
++    assert 'data-mode="single"' in r.text
++    assert 'data-mode="picture"' in r.text
++    assert 'data-mode="reddit"' in r.text
++    assert "Single background video" in r.text
++    assert "Uses random clips from Library → Videos" in r.text
++    assert 'id="tab-roblox"' not in r.text
++    assert 'data-mode="roblox"' not in r.text
++    assert ">Roblox</button>" not in r.text
+     assert 'id="image_name"' in r.text
+     assert "still.jpg" in r.text
+     assert 'id="ken_burns"' in r.text
+     assert 'id="image-file"' not in r.text
+     assert 'id="image-upload-btn"' not in r.text
+     assert 'id="image-delete-btn"' not in r.text
+-    # Ken Burns lives in the picture block, not the roblox source block
+-    roblox_idx = r.text.index('id="roblox-source-block"')
++    # Ken Burns lives in the picture block, not the single source block.
++    single_idx = r.text.index('id="single-source-block"')
+     picture_idx = r.text.index('id="picture-source-block"')
++    reddit_idx = r.text.index('id="reddit-source-block"')
+     ken_idx = r.text.index('id="ken_burns"')
+     assert picture_idx < ken_idx
+-    assert "ken_burns" not in r.text[roblox_idx:picture_idx]
++    assert "ken_burns" not in r.text[single_idx:picture_idx]
++    assert 'id="source_name"' not in r.text[reddit_idx:]
+     assert 'id="video_speed"' in r.text
+-    assert "(video)" in r.text or "(1m)" in r.text
++
++
++def test_create_job_reddit_mode(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    settings = c.app.state.settings
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    (settings.videos_dir / "clip.mp4").write_bytes(b"vid")
++
++    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
++        record = self.get(job_id)
++        assert record is not None
++        record.status = "done"
++        with self._lock:
++            if self._active_id == job_id:
++                self._active_id = None
++
++    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
++
++    r = c.post(
++        "/api/jobs",
++        json={
++            "mode": "reddit",
++            "source_name": "",
++            "story": "Hi there.\n",
++            "voice": "en-US-EmmaNeural",
++        },
++    )
++    assert r.status_code == 200
++    polled = c.get(f"/api/jobs/{r.json()['id']}")
++    assert polled.json()["mode"] == "reddit"
++
++
++def test_create_job_maps_roblox_to_single(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    _seed_source(c)
++
++    def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
++        record = self.get(job_id)
++        assert record is not None
++        record.status = "done"
++        with self._lock:
++            if self._active_id == job_id:
++                self._active_id = None
++
++    monkeypatch.setattr(JobManager, "run_job", fake_run_job)
++
++    r = c.post(
++        "/api/jobs",
++        json={
++            "mode": "roblox",
++            "source_name": "clip.mp4",
++            "story": "Hi.\n",
++            "voice": "en-US-EmmaNeural",
++        },
++    )
++    assert r.status_code == 200
++    polled = c.get(f"/api/jobs/{r.json()['id']}")
++    assert polled.json()["mode"] == "single"
++
++
++def test_generate_page_lists_slices_not_raw_videos(tmp_path, monkeypatch):
++    async def fake_voices():
++        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
++
++    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    settings = c.app.state.settings
++    settings.sources_dir.mkdir(parents=True, exist_ok=True)
++    (settings.sources_dir / "slice-1.mp4").write_bytes(b"slice")
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    (settings.videos_dir / "raw-only.mp4").write_bytes(b"raw")
++
++    r = c.get("/")
++    assert r.status_code == 200
++    assert "slice-1.mp4" in r.text
++    assert "raw-only.mp4" not in r.text
+ 
+ 
+ def test_image_upload_requires_auth(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     r = c.post(
+         "/api/images",
+         files={"file": ("photo.jpg", b"xx", "image/jpeg")},
+     )
+     assert r.status_code == 401
+ 
+@@ -422,30 +511,30 @@ def test_create_picture_job(tmp_path, monkeypatch):
+ 
+ 
+ def test_create_job_mode_source_mismatch_400(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
+     _seed_source(c)
+     settings = c.app.state.settings
+     settings.images_dir.mkdir(parents=True, exist_ok=True)
+     (settings.images_dir / "still.jpg").write_bytes(b"img")
+ 
+-    roblox_with_image = c.post(
++    single_with_image = c.post(
+         "/api/jobs",
+         json={
+-            "mode": "roblox",
++            "mode": "single",
+             "source_name": "still.jpg",
+             "story": "Hi.\n",
+             "voice": "en-US-EmmaNeural",
+         },
+     )
+-    assert roblox_with_image.status_code == 400
++    assert single_with_image.status_code == 400
+ 
+     picture_with_video = c.post(
+         "/api/jobs",
+         json={
+             "mode": "picture",
+             "source_name": "clip.mp4",
+             "story": "Hi.\n",
+             "voice": "en-US-EmmaNeural",
+         },
+     )
+@@ -456,21 +545,21 @@ def test_create_job_mode_source_mismatch_400(tmp_path, monkeypatch):
+         json={
+             "mode": "gif",
+             "source_name": "clip.mp4",
+             "story": "Hi.\n",
+             "voice": "en-US-EmmaNeural",
+         },
+     )
+     assert unknown.status_code == 400
+ 
+ 
+-def test_create_roblox_job_ignores_ken_burns(tmp_path, monkeypatch):
++def test_create_single_job_ignores_ken_burns(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
+     _seed_source(c)
+ 
+     def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
+         record = self.get(job_id)
+         assert record is not None
+         record.status = "done"
+         with self._lock:
+             if self._active_id == job_id:
+@@ -481,21 +570,21 @@ def test_create_roblox_job_ignores_ken_burns(tmp_path, monkeypatch):
+         "/api/jobs",
+         json={
+             "source_name": "clip.mp4",
+             "story": "Hi.\n",
+             "voice": "en-US-EmmaNeural",
+             "ken_burns": True,
+         },
+     )
+     assert r.status_code == 200
+     data = c.get(f"/api/jobs/{r.json()['id']}").json()
+-    assert data["mode"] == "roblox"
++    assert data["mode"] == "single"
+     assert data["ken_burns"] is False
+ 
+ 
+ def test_api_jobs_accepts_video_speed(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
+     _seed_source(c)
+ 
+     def fake_run_job(self: JobManager, settings: Settings, job_id: str) -> None:
+         record = self.get(job_id)
+diff --git a/tests/web/test_api_v1.py b/tests/web/test_api_v1.py
+index a815b8c..88bd45c 100644
+--- a/tests/web/test_api_v1.py
++++ b/tests/web/test_api_v1.py
+@@ -14,21 +14,21 @@ def _client(tmp_path, monkeypatch):
+     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+     monkeypatch.setenv("API_KEY", API_KEY)
+     clear_cache()
+     return TestClient(create_app(Settings.from_env()))
+ 
+ 
+ def _headers():
+     return {"X-API-Key": API_KEY}
+ 
+ 
+-def test_create_roblox_video_returns_id(tmp_path, monkeypatch):
++def test_create_single_video_returns_id(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+ 
+     def fake_run(self, settings, job_id):
+         rec = self.get(job_id)
+         rec.status = "done"
+         rec.output_name = f"{job_id}.mp4"
+         out = settings.outputs_dir / rec.output_name
+         out.parent.mkdir(parents=True, exist_ok=True)
+@@ -37,31 +37,31 @@ def test_create_roblox_video_returns_id(tmp_path, monkeypatch):
+             if self._active_id == job_id:
+                 self._active_id = None
+ 
+     monkeypatch.setattr(JobManager, "run_job", fake_run)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hello world.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+         },
+     )
+     assert r.status_code == 200
+     job_id = r.json()["id"]
+     assert job_id
+     st = c.get(f"/api/v1/videos/{job_id}", headers=_headers())
+     assert st.status_code == 200
+     assert st.json()["status"] == "done"
+-    assert st.json()["mode"] == "roblox"
++    assert st.json()["mode"] == "single"
+ 
+ 
+ def test_create_leni_maps_to_picture(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     settings.images_dir.mkdir(parents=True, exist_ok=True)
+     (settings.images_dir / "still.jpg").write_bytes(b"img")
+ 
+     def fake_run(self, settings, job_id):
+         rec = self.get(job_id)
+@@ -92,21 +92,21 @@ def test_create_accepts_optional_pitch_and_speed(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+             "pitch": "-20",
+             "speed": "150",
+         },
+     )
+     assert r.status_code == 200
+     st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+     assert st.json()["pitch"] == -20
+     assert st.json()["speed"] == 150
+ 
+@@ -115,21 +115,21 @@ def test_create_defaults_pitch_and_speed(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+         },
+     )
+     assert r.status_code == 200
+     st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+     assert st.json()["pitch"] == 15
+     assert st.json()["speed"] == 130
+     assert st.json()["video_speed"] == 100
+ 
+ 
+@@ -137,78 +137,77 @@ def test_create_accepts_video_speed(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+             "video_speed": "160",
+         },
+     )
+     assert r.status_code == 200
+     st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+     assert st.json()["video_speed"] == 160
+ 
+ 
+-def test_create_resolves_raw_library_video(tmp_path, monkeypatch):
++def test_create_resolves_source_video(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+-    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+-    (settings.videos_dir / "raw.mp4").write_bytes(b"vid")
++    (settings.sources_dir / "raw.mp4").write_bytes(b"vid")
+     monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "raw.mp4",
+         },
+     )
+     assert r.status_code == 200
+ 
+ 
+ def test_create_invalid_video_speed_400(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+             "video_speed": "9",
+         },
+     )
+     assert r.status_code == 400
+ 
+ 
+ def test_create_invalid_pitch_400(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+             "pitch": "999",
+         },
+     )
+     assert r.status_code == 400
+ 
+ 
+ def test_create_bad_type_400(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     r = c.post(
+@@ -217,40 +216,95 @@ def test_create_bad_type_400(tmp_path, monkeypatch):
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+             "type": "other",
+             "source_name": "clip.mp4",
+         },
+     )
+     assert r.status_code == 400
+ 
+ 
++def test_create_roblox_type_400(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    (c.app.state.settings.sources_dir / "clip.mp4").write_bytes(b"vid")
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "roblox",
++            "source_name": "clip.mp4",
++        },
++    )
++    assert r.status_code == 400
++    assert "single" in r.json()["detail"].lower()
++
++
++def test_create_reddit_with_story_voice_type(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
++    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "reddit",
++        },
++    )
++    assert r.status_code == 200
++    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
++    assert st.json()["mode"] == "reddit"
++
++
++def test_create_reddit_rejects_media(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "reddit",
++        },
++        files={"media": ("clip.mp4", b"x", "video/mp4")},
++    )
++    assert r.status_code == 400
++
++
+ def test_create_busy_409(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     mgr: JobManager = c.app.state.job_manager
+     mgr._active_id = "busy"
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+         },
+     )
+     assert r.status_code == 409
+ 
+ 
+-def test_create_with_media_upload_roblox(tmp_path, monkeypatch):
++def test_create_with_media_upload_single(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+ 
+     def fake_run(self, settings, job_id):
+         rec = self.get(job_id)
+         assert rec.ephemeral is True
+         inp = settings.jobs_dir / job_id / rec.source_name
+         assert inp.is_file()
+         rec.status = "done"
+         rec.output_name = f"{job_id}.mp4"
+         (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+@@ -258,21 +312,21 @@ def test_create_with_media_upload_roblox(tmp_path, monkeypatch):
+             if self._active_id == job_id:
+                 self._active_id = None
+ 
+     monkeypatch.setattr(JobManager, "run_job", fake_run)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+         },
+         files={"media": ("clip.mp4", b"fake-video", "video/mp4")},
+     )
+     assert r.status_code == 200
+     assert r.json()["id"]
+ 
+ 
+ def test_create_with_media_upload_leni(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+ 
+@@ -305,51 +359,51 @@ def test_create_with_media_upload_leni(tmp_path, monkeypatch):
+ 
+ def test_create_rejects_both_media_and_source_name(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     (c.app.state.settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+         },
+         files={"media": ("clip.mp4", b"x", "video/mp4")},
+     )
+     assert r.status_code == 400
+ 
+ 
+ def test_create_rejects_neither_media_nor_source(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+         },
+     )
+     assert r.status_code == 400
+ 
+ 
+-def test_create_rejects_image_for_roblox(tmp_path, monkeypatch):
++def test_create_rejects_image_for_single(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+         },
+         files={"media": ("still.jpg", b"x", "image/jpeg")},
+     )
+     assert r.status_code == 400
+ 
+ 
+ def test_download_done_returns_mp4(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+@@ -363,56 +417,56 @@ def test_download_done_returns_mp4(tmp_path, monkeypatch):
+             if self._active_id == job_id:
+                 self._active_id = None
+ 
+     monkeypatch.setattr(JobManager, "run_job", fake_run)
+     job_id = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+-            "type": "roblox",
++            "type": "single",
+             "source_name": "clip.mp4",
+         },
+     ).json()["id"]
+     r = c.get(f"/api/v1/videos/{job_id}/download", headers=_headers())
+     assert r.status_code == 200
+     assert r.content == b"fake-mp4-bytes"
+     assert "video/mp4" in r.headers.get("content-type", "")
+ 
+ 
+ def test_download_not_ready_409(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+ 
+     def fake_run(self, settings, job_id):
+         pass
+ 
+     monkeypatch.setattr(JobManager, "run_job", fake_run)
+     mgr: JobManager = c.app.state.job_manager
+     rec = mgr.create(
+-        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="roblox"
++        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="single"
+     )
+     with mgr._lock:
+         mgr._active_id = None
+     r = c.get(f"/api/v1/videos/{rec.id}/download", headers=_headers())
+     assert r.status_code == 409
+ 
+ 
+ def test_download_error_422(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     mgr: JobManager = c.app.state.job_manager
+     rec = mgr.create(
+-        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="roblox"
++        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="single"
+     )
+     rec.status = "error"
+     rec.error = "boom"
+     with mgr._lock:
+         mgr._active_id = None
+     r = c.get(f"/api/v1/videos/{rec.id}/download", headers=_headers())
+     assert r.status_code == 422
+ 
+ 
+ def test_download_unknown_404(tmp_path, monkeypatch):
+diff --git a/tests/web/test_jobs.py b/tests/web/test_jobs.py
+index ceb0950..2ad4573 100644
+--- a/tests/web/test_jobs.py
++++ b/tests/web/test_jobs.py
+@@ -1,14 +1,16 @@
++import json
+ from pathlib import Path
+ 
+ import pytest
+ from roblox_viral.voice import WordTiming
++from roblox_viral.web import jobs as jobs_module
+ from roblox_viral.web.config import Settings
+ from roblox_viral.web.jobs import BusyError, JobManager
+ 
+ 
+ def _settings(tmp_path, monkeypatch):
+     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+     monkeypatch.setenv("APP_PASSWORD", "x")
+     monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+     s = Settings.from_env()
+     s.ensure_media_dirs()
+@@ -223,31 +225,31 @@ def test_create_picture_job_resolves_image(tmp_path, monkeypatch):
+ 
+ def test_create_picture_rejects_video_name(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     mgr = JobManager()
+     with pytest.raises((ValueError, FileNotFoundError)):
+         mgr.create(
+             s, "clip.mp4", "Hello world.\n", "en-US-EmmaNeural", mode="picture"
+         )
+ 
+ 
+-def test_create_roblox_ignores_ken_burns(tmp_path, monkeypatch):
++def test_create_single_ignores_ken_burns(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     mgr = JobManager()
+     job = mgr.create(
+         s,
+         "clip.mp4",
+         "Hello world.\n",
+         "en-US-EmmaNeural",
+         ken_burns=True,
+     )
+-    assert job.mode == "roblox"
++    assert job.mode == "single"
+     assert job.ken_burns is False
+ 
+ 
+ def test_create_rejects_unknown_mode(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     mgr = JobManager()
+     with pytest.raises(ValueError, match="mode"):
+         mgr.create(
+             s, "clip.mp4", "Hello world.\n", "en-US-EmmaNeural", mode="gif"
+         )
+@@ -312,21 +314,21 @@ def test_run_picture_job_calls_render_still(tmp_path, monkeypatch):
+ 
+ 
+ def test_create_ephemeral_skips_library(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     mgr = JobManager()
+     job = mgr.create(
+         s,
+         "input.mp4",
+         "One line only here.\n",
+         "en-US-EmmaNeural",
+-        mode="roblox",
++        mode="single",
+         ephemeral=True,
+     )
+     assert job.ephemeral is True
+     assert job.source_name == "input.mp4"
+ 
+ 
+ def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     mgr = JobManager()
+     seen = {}
+@@ -346,33 +348,33 @@ def test_run_job_ephemeral_uses_job_dir_input(tmp_path, monkeypatch):
+         "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+ 
+     job = mgr.create(
+         s,
+         "input.mp4",
+         "One line only here.\n",
+         "en-US-EmmaNeural",
+-        mode="roblox",
++        mode="single",
+         ephemeral=True,
+     )
+     input_path = s.jobs_dir / job.id / "input.mp4"
+     input_path.write_bytes(b"vid")
+     mgr.run_job(s, job.id)
+     assert mgr.get(job.id, s).status == "done"
+     assert seen["video_path"] == input_path.resolve()
+ 
+ 
+ def test_create_job_persists_video_speed(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+-    (s.videos_dir / "raw-only.mp4").write_bytes(b"vid")
++    (s.sources_dir / "raw-only.mp4").write_bytes(b"vid")
+     mgr = JobManager()
+     record = mgr.create(
+         s,
+         "raw-only.mp4",
+         "Hello world.\n",
+         "en-US-EmmaNeural",
+         video_speed=150,
+     )
+     assert record.video_speed == 150
+     job_id = record.id
+@@ -424,10 +426,119 @@ def test_run_job_passes_video_speed_to_render(tmp_path, monkeypatch):
+     job = mgr.create(
+         s,
+         "clip.mp4",
+         "One line only here.\n",
+         "en-US-EmmaNeural",
+         video_speed=175,
+     )
+     mgr.run_job(s, job.id)
+     assert seen["video_speed"] == 175
+     assert mgr.get(job.id, s).status == "done"
++
++
++def test_normalize_mode_maps_roblox_to_single():
++    assert hasattr(jobs_module, "normalize_mode")
++    assert jobs_module.normalize_mode("roblox") == "single"
++    assert jobs_module.normalize_mode("single") == "single"
++    assert jobs_module.normalize_mode("picture") == "picture"
++    assert jobs_module.normalize_mode("reddit") == "reddit"
++    with pytest.raises(ValueError, match="mode"):
++        jobs_module.normalize_mode("gif")
++
++
++def test_create_single_rejects_missing_source(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    with pytest.raises((ValueError, FileNotFoundError)):
++        mgr.create(s, "", "Hello world.\n", "en-US-EmmaNeural", mode="single")
++
++
++def test_create_reddit_requires_videos_pool(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    with pytest.raises(ValueError, match="video"):
++        mgr.create(s, "", "Hello world.\n", "en-US-EmmaNeural", mode="reddit")
++
++
++def test_create_reddit_ok_with_videos(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    (s.videos_dir / "background.mp4").write_bytes(b"vid")
++    mgr = JobManager()
++    job = mgr.create(s, "", "Hello world.\n", "en-US-EmmaNeural", mode="reddit")
++    assert job.mode == "reddit"
++    assert job.source_name in ("", "reddit")
++    assert job.ken_burns is False
++
++
++def test_hydrate_roblox_mode_as_single(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    mgr = JobManager()
++    job = mgr.create(
++        s, "clip.mp4", "Hello world.\n", "en-US-EmmaNeural", mode="single"
++    )
++    status_path = s.jobs_dir / job.id / "status.json"
++    data = json.loads(status_path.read_text(encoding="utf-8"))
++    data["mode"] = "roblox"
++    status_path.write_text(json.dumps(data), encoding="utf-8")
++
++    hydrated = JobManager().get(job.id, s)
++    assert hydrated is not None
++    assert hydrated.mode == "single"
++
++
++def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
++    s = _settings(tmp_path, monkeypatch)
++    videos = [s.videos_dir / "one.mp4", s.videos_dir / "two.mp4"]
++    for video in videos:
++        video.write_bytes(b"vid")
++    mgr = JobManager()
++    seen = {}
++
++    def fake_synthesize(self, text, output_path):
++        Path(output_path).write_bytes(b"mp3")
++        return [WordTiming("One", 0, 100)]
++
++    def fake_write_ass(words, ass_path, sentences=None):
++        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
++
++    def fake_probe(path):
++        path = Path(path)
++        return 12.0 if path.name == "narration.mp3" else 8.0
++
++    def fake_plan(paths, target_seconds, *, durations):
++        seen["plan"] = (paths, target_seconds, durations)
++        return ["planned-segment"]
++
++    def fake_build(segments, output_path, *, work_dir=None):
++        seen["build"] = (segments, Path(output_path), Path(work_dir))
++        Path(output_path).write_bytes(b"background")
++
++    def fake_render_video(**kwargs):
++        seen["render"] = kwargs
++        Path(kwargs["output_path"]).write_bytes(b"mp4")
++
++    monkeypatch.setattr(
++        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
++    monkeypatch.setattr(
++        jobs_module, "probe_duration_seconds", fake_probe, raising=False
++    )
++    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
++    monkeypatch.setattr(
++        jobs_module, "build_reddit_background", fake_build, raising=False
++    )
++    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
++
++    job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
++    mgr.run_job(s, job.id)
++
++    reddit_bg = s.jobs_dir / job.id / "reddit_bg.mp4"
++    paths, target_seconds, durations = seen["plan"]
++    assert paths == videos
++    assert target_seconds == 12.0
++    assert durations == {videos[0]: 8.0, videos[1]: 8.0}
++    assert seen["build"] == (["planned-segment"], reddit_bg, s.jobs_dir / job.id)
++    assert seen["render"]["video_path"] == reddit_bg
++    assert seen["render"]["overlay_path"] == s.overlay_video_path
++    assert seen["render"]["video_speed"] == job.video_speed
++    assert mgr.get(job.id, s).status == "done"

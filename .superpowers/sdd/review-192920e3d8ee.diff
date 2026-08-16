@@ -1,0 +1,360 @@
+=== COMMITS ===
+fc88918 feat(web): add media/videos library helpers for raw uploads
+
+=== STAT ===
+ src/roblox_viral/web/config.py  | 12 +++++-
+ src/roblox_viral/web/library.py | 76 ++++++++++++++++++++++++++++++++++++
+ tests/web/test_library.py       | 85 +++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 172 insertions(+), 1 deletion(-)
+
+=== DIFF ===
+diff --git a/src/roblox_viral/web/config.py b/src/roblox_viral/web/config.py
+index 967df8e..2e455af 100644
+--- a/src/roblox_viral/web/config.py
++++ b/src/roblox_viral/web/config.py
+@@ -37,20 +37,24 @@ class Settings:
+     require_password: bool = True
+     gemini_api_key: str = ""
+     youtube_cookies: str = ""
+     overlay_video: str = ""
+     api_key: str = ""
+ 
+     @property
+     def sources_dir(self) -> Path:
+         return self.media_root / "sources"
+ 
++    @property
++    def videos_dir(self) -> Path:
++        return self.media_root / "videos"
++
+     @property
+     def images_dir(self) -> Path:
+         return self.media_root / "images"
+ 
+     @property
+     def outputs_dir(self) -> Path:
+         return self.media_root / "outputs"
+ 
+     @property
+     def jobs_dir(self) -> Path:
+@@ -68,21 +72,27 @@ class Settings:
+             return path if path.is_file() else None
+         default = self.media_root / "youtube_cookies.txt"
+         return default if default.is_file() else None
+ 
+     @property
+     def overlay_video_path(self) -> Path | None:
+         """Greenscreen intro overlay MP4, if configured or present under media/."""
+         return resolve_overlay_video_path(self.media_root, self.overlay_video)
+ 
+     def ensure_media_dirs(self) -> None:
+-        for d in (self.sources_dir, self.images_dir, self.outputs_dir, self.jobs_dir):
++        for d in (
++            self.sources_dir,
++            self.videos_dir,
++            self.images_dir,
++            self.outputs_dir,
++            self.jobs_dir,
++        ):
+             d.mkdir(parents=True, exist_ok=True)
+ 
+     @classmethod
+     def from_env(cls) -> Settings:
+         media = Path(os.environ.get("MEDIA_ROOT", "media")).resolve()
+         password = os.environ.get("APP_PASSWORD", "")
+         secret = os.environ.get("APP_SECRET", "")
+         require = os.environ.get("APP_REQUIRE_PASSWORD", "1") not in ("0", "false", "False")
+         if require and not password:
+             raise RuntimeError("APP_PASSWORD is required")
+diff --git a/src/roblox_viral/web/library.py b/src/roblox_viral/web/library.py
+index d2e089f..f6d0687 100644
+--- a/src/roblox_viral/web/library.py
++++ b/src/roblox_viral/web/library.py
+@@ -24,20 +24,28 @@ class SourceVideo:
+     size_bytes: int
+ 
+ 
+ @dataclass(frozen=True)
+ class SourceImage:
+     name: str
+     path: Path
+     size_bytes: int
+ 
+ 
++@dataclass(frozen=True)
++class RobloxSource:
++    name: str
++    kind: str  # "slice" | "video"
++    path: Path
++    size_bytes: int
++
++
+ @dataclass(frozen=True)
+ class OutputVideo:
+     name: str
+     path: Path
+     size_bytes: int
+ 
+ 
+ def _safe_name(name: str) -> str:
+     base = Path(name).name
+     if base != name or not _SAFE_NAME.match(base):
+@@ -71,20 +79,37 @@ def _commit_image_upload(images_dir: Path, safe: str, data: bytes) -> Path:
+                 fh.write(data)
+         except FileExistsError:
+             dest = images_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
+             continue
+         except BaseException:
+             dest.unlink(missing_ok=True)
+             raise
+         return dest
+ 
+ 
++def _commit_video_upload(videos_dir: Path, safe: str, data: bytes) -> Path:
++    stem = Path(safe).stem
++    suffix = Path(safe).suffix.lower()
++    dest = videos_dir / safe
++    while True:
++        try:
++            with open(dest, "xb") as fh:
++                fh.write(data)
++        except FileExistsError:
++            dest = videos_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
++            continue
++        except BaseException:
++            dest.unlink(missing_ok=True)
++            raise
++        return dest
++
++
+ def plan_full_minute_count(duration_seconds: float) -> int:
+     """How many complete 1-minute slices to keep (tail under 60s discarded)."""
+     if duration_seconds < 0:
+         return 0
+     return int(duration_seconds // SLICE_SECONDS)
+ 
+ 
+ def slice_part_name(stem: str, part: int) -> str:
+     """e.g. gameplay + 1 → gameplay-1.mp4"""
+     return f"{stem}-{part}.mp4"
+@@ -101,20 +126,30 @@ def make_output_name(source_name: str, when: datetime | None = None) -> str:
+ 
+ 
+ def list_sources(settings: Settings) -> list[SourceVideo]:
+     items: list[SourceVideo] = []
+     for path in sorted(settings.sources_dir.iterdir()):
+         if path.is_file() and _SAFE_NAME.match(path.name) and not path.name.startswith("."):
+             items.append(SourceVideo(path.name, path, path.stat().st_size))
+     return items
+ 
+ 
++def list_videos(settings: Settings) -> list[SourceVideo]:
++    items: list[SourceVideo] = []
++    if not settings.videos_dir.is_dir():
++        return items
++    for path in sorted(settings.videos_dir.iterdir()):
++        if path.is_file() and _SAFE_NAME.match(path.name) and not path.name.startswith("."):
++            items.append(SourceVideo(path.name, path, path.stat().st_size))
++    return items
++
++
+ def list_images(settings: Settings) -> list[SourceImage]:
+     items: list[SourceImage] = []
+     if not settings.images_dir.is_dir():
+         return items
+     for path in sorted(settings.images_dir.iterdir()):
+         if path.is_file() and _SAFE_IMAGE_NAME.match(path.name) and not path.name.startswith("."):
+             items.append(SourceImage(path.name, path, path.stat().st_size))
+     return items
+ 
+ 
+@@ -131,20 +166,30 @@ def list_outputs(settings: Settings, *, limit: int = 10) -> list[OutputVideo]:
+ def resolve_source(settings: Settings, name: str) -> Path:
+     safe = _safe_name(name)
+     path = (settings.sources_dir / safe).resolve()
+     if not path.is_relative_to(settings.sources_dir.resolve()):
+         raise ValueError("Invalid path")
+     if not path.is_file():
+         raise FileNotFoundError(safe)
+     return path
+ 
+ 
++def resolve_video(settings: Settings, name: str) -> Path:
++    safe = _safe_name(name)
++    path = (settings.videos_dir / safe).resolve()
++    if not path.is_relative_to(settings.videos_dir.resolve()):
++        raise ValueError("Invalid path")
++    if not path.is_file():
++        raise FileNotFoundError(safe)
++    return path
++
++
+ def resolve_image(settings: Settings, name: str) -> Path:
+     safe = _safe_image_name(name)
+     path = (settings.images_dir / safe).resolve()
+     if not path.is_relative_to(settings.images_dir.resolve()):
+         raise ValueError("Invalid path")
+     if not path.is_file():
+         raise FileNotFoundError(safe)
+     return path
+ 
+ 
+@@ -242,27 +287,58 @@ def save_upload(settings: Settings, filename: str, data: bytes) -> list[SourceVi
+     stem = Path(safe).stem
+     suffix = Path(safe).suffix.lower() or ".mp4"
+     temp = settings.sources_dir / f".upload-{uuid.uuid4().hex}{suffix}"
+     try:
+         temp.write_bytes(data)
+         return slice_into_minute_parts(settings, temp, stem)
+     finally:
+         temp.unlink(missing_ok=True)
+ 
+ 
++def save_video(settings: Settings, filename: str, data: bytes) -> SourceVideo:
++    if len(data) > MAX_UPLOAD_BYTES:
++        raise ValueError(
++            f"Upload exceeds maximum size of {MAX_UPLOAD_BYTES} bytes"
++        )
++    safe = _safe_name(filename)
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    dest = _commit_video_upload(settings.videos_dir, safe, data)
++    return SourceVideo(dest.name, dest, dest.stat().st_size)
++
++
+ def save_image(settings: Settings, filename: str, data: bytes) -> SourceImage:
+     if len(data) > MAX_IMAGE_UPLOAD_BYTES:
+         raise ValueError(
+             f"Upload exceeds maximum size of {MAX_IMAGE_UPLOAD_BYTES} bytes"
+         )
+     safe = _safe_image_name(filename)
+     settings.images_dir.mkdir(parents=True, exist_ok=True)
+     dest = _commit_image_upload(settings.images_dir, safe, data)
+     return SourceImage(dest.name, dest, dest.stat().st_size)
+ 
+ 
+ def delete_source(settings: Settings, name: str) -> None:
+     resolve_source(settings, name).unlink()
+ 
+ 
++def delete_video(settings: Settings, name: str) -> None:
++    resolve_video(settings, name).unlink()
++
++
+ def delete_image(settings: Settings, name: str) -> None:
+     resolve_image(settings, name).unlink()
++
++
++def resolve_roblox_media(settings: Settings, name: str) -> Path:
++    try:
++        return resolve_source(settings, name)
++    except FileNotFoundError:
++        return resolve_video(settings, name)
++
++
++def list_roblox_sources(settings: Settings) -> list[RobloxSource]:
++    out: list[RobloxSource] = []
++    for s in list_sources(settings):
++        out.append(RobloxSource(s.name, "slice", s.path, s.size_bytes))
++    for v in list_videos(settings):
++        out.append(RobloxSource(v.name, "video", v.path, v.size_bytes))
++    return out
+diff --git a/tests/web/test_library.py b/tests/web/test_library.py
+index 2aea08b..acbe019 100644
+--- a/tests/web/test_library.py
++++ b/tests/web/test_library.py
+@@ -198,10 +198,95 @@ def test_save_image_rejects_oversize_and_unsafe(tmp_path, monkeypatch):
+     with pytest.raises(ValueError):
+         library.resolve_image(s, "clip.mp4")
+ 
+ 
+ def test_images_not_listed_as_video_sources(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     library.save_image(s, "still.png", b"png")
+     (s.sources_dir / "clip.mp4").write_bytes(b"vid")
+     assert [x.name for x in library.list_sources(s)] == ["clip.mp4"]
+     assert [x.name for x in library.list_images(s)] == ["still.png"]
++
++
++def test_save_video_stores_as_is_no_slice(tmp_path, monkeypatch):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++        youtube_cookies="",
++    )
++    s.ensure_media_dirs()
++    called = {"slice": False}
++
++    def boom(*a, **k):
++        called["slice"] = True
++        raise AssertionError("slice must not run")
++
++    monkeypatch.setattr(lib, "slice_into_minute_parts", boom)
++    item = lib.save_video(s, "full.mp4", b"rawbytes")
++    assert item.name == "full.mp4"
++    assert (s.videos_dir / "full.mp4").read_bytes() == b"rawbytes"
++    assert called["slice"] is False
++    assert lib.list_videos(s)[0].name == "full.mp4"
++
++
++def test_resolve_roblox_media_sources_win(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++        youtube_cookies="",
++    )
++    s.ensure_media_dirs()
++    (s.sources_dir / "same.mp4").write_bytes(b"slice")
++    (s.videos_dir / "same.mp4").write_bytes(b"raw")
++    path = lib.resolve_roblox_media(s, "same.mp4")
++    assert path == (s.sources_dir / "same.mp4").resolve()
++
++
++def test_resolve_roblox_media_falls_back_to_videos(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++        youtube_cookies="",
++    )
++    s.ensure_media_dirs()
++    (s.videos_dir / "only.mp4").write_bytes(b"raw")
++    path = lib.resolve_roblox_media(s, "only.mp4")
++    assert path == (s.videos_dir / "only.mp4").resolve()
++
++
++def test_list_roblox_sources_labels_kinds(tmp_path):
++    from roblox_viral.web.config import Settings
++    from roblox_viral.web import library as lib
++
++    media = tmp_path / "media"
++    s = Settings(
++        media_root=media,
++        app_password="x",
++        app_secret="dev-secret-key-at-least-32-chars!!",
++        require_password=False,
++        youtube_cookies="",
++    )
++    s.ensure_media_dirs()
++    (s.sources_dir / "a-1.mp4").write_bytes(b"1")
++    (s.videos_dir / "b.mp4").write_bytes(b"2")
++    items = lib.list_roblox_sources(s)
++    kinds = {i.name: i.kind for i in items}
++    assert kinds["a-1.mp4"] == "slice"
++    assert kinds["b.mp4"] == "video"

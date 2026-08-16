@@ -1,0 +1,197 @@
+# Review package: 1c85fa5b64dc63717076a84676566e91e2228042..e532eeeed11f29e905541c63c8e2f5e33975221d
+
+## Commits
+e532eee feat(web): add Download title card link for Reddit jobs
+
+## Files changed
+ README.md                                    |  2 +-
+ src/roblox_viral/web/static/app.js           | 17 +++++++++++++++--
+ src/roblox_viral/web/templates/generate.html |  5 ++++-
+ tests/web/test_api.py                        | 13 +++++++++++++
+ 4 files changed, 33 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/README.md b/README.md
+index 8a24d8a..c73d72d 100644
+--- a/README.md
++++ b/README.md
+@@ -61,21 +61,21 @@ Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story p
+ Library lists include inline preview (video controls with no preload; lazy images).
+ 
+ On **Generate**, pick a background mode via three tabs:
+ 
+ | Tab | Behavior |
+ |-----|----------|
+ | **Single background video** | Pick a one-minute clip from Library â†’ 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50â€“200%, default 100%) independent of voice pitch/speed. Greenscreen overlay at start. |
+ | **Picture** | Pick an image from Library â†’ Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
+ | **Reddit** | No source picker â€” auto-concat random clips from Library â†’ Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Requires at least one video in the Videos pool. |
+ 
+-**Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The subscribe greenscreen overlay is not used for Reddit yet.
++**Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The card is rendered at ~2Ã— scale and can be downloaded from the result panel after a Reddit job completes. The subscribe greenscreen overlay is not used for Reddit yet.
+ 
+ The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080Ã—1920 frame** (2Ã— the former half-height target), chromakeyed, and centered. Applies to **Single** only.
+ 
+ ### Local run
+ 
+ ```bash
+ # Windows
+ set APP_PASSWORD=your-password
+ set APP_SECRET=your-long-random-secret
+ 
+diff --git a/src/roblox_viral/web/static/app.js b/src/roblox_viral/web/static/app.js
+index 8954eb9..5734915 100644
+--- a/src/roblox_viral/web/static/app.js
++++ b/src/roblox_viral/web/static/app.js
+@@ -123,20 +123,21 @@
+   }
+   if (sourceSelect) sourceSelect.addEventListener("change", syncGenerateEnabled);
+   if (imageSelect) imageSelect.addEventListener("change", syncGenerateEnabled);
+   syncGenerateEnabled();
+ 
+   const statusEl = document.getElementById("status");
+   const errorEl = document.getElementById("error");
+   const resultEl = document.getElementById("result");
+   const player = document.getElementById("player");
+   const download = document.getElementById("download");
++  const downloadCard = document.getElementById("download-card");
+ 
+   let pollTimer = null;
+ 
+   function setStatus(text) {
+     statusEl.textContent = text;
+   }
+ 
+   function showError(message) {
+     errorEl.hidden = false;
+     errorEl.textContent = message;
+@@ -147,26 +148,38 @@
+     errorEl.textContent = "";
+   }
+ 
+   function stopPolling() {
+     if (pollTimer !== null) {
+       clearInterval(pollTimer);
+       pollTimer = null;
+     }
+   }
+ 
+-  function showResult(outputName) {
++  function showResult(outputName, titleCardName) {
+     const url = `/media/outputs/${encodeURIComponent(outputName)}`;
+     resultEl.hidden = false;
+     player.src = url;
+     download.href = url;
+     download.download = outputName;
++    if (downloadCard) {
++      if (titleCardName) {
++        const cardUrl = `/media/outputs/${encodeURIComponent(titleCardName)}`;
++        downloadCard.hidden = false;
++        downloadCard.href = cardUrl;
++        downloadCard.download = titleCardName;
++      } else {
++        downloadCard.hidden = true;
++        downloadCard.removeAttribute("href");
++        downloadCard.removeAttribute("download");
++      }
++    }
+     prependRecentOutput(outputName);
+   }
+ 
+   function prependRecentOutput(outputName) {
+     const section = document.querySelector(".recent-outputs");
+     if (!section) return;
+     let list = section.querySelector("ul.source-list");
+     const empty = section.querySelector(":scope > p");
+     if (!list) {
+       if (empty) empty.remove();
+@@ -199,21 +212,21 @@
+     });
+     if (!res.ok) {
+       throw new Error(`Status request failed (${res.status})`);
+     }
+     const job = await res.json();
+     setStatus(job.status);
+     if (job.status === "done") {
+       stopPolling();
+       syncGenerateEnabled();
+       if (job.output_name) {
+-        showResult(job.output_name);
++        showResult(job.output_name, job.title_card_name || null);
+       }
+       return;
+     }
+     if (job.status === "error") {
+       stopPolling();
+       syncGenerateEnabled();
+       showError(job.error || "Render failed");
+     }
+   }
+ 
+diff --git a/src/roblox_viral/web/templates/generate.html b/src/roblox_viral/web/templates/generate.html
+index d0b92f2..14fc8d4 100644
+--- a/src/roblox_viral/web/templates/generate.html
++++ b/src/roblox_viral/web/templates/generate.html
+@@ -87,21 +87,24 @@
+     <button id="generate-btn" type="submit"{% if not sources %} disabled{% endif %}>Generate</button>
+   </form>
+ 
+   <section class="progress" aria-live="polite">
+     <p>Status: <span id="status">idle</span></p>
+     <p id="error" class="error" hidden></p>
+   </section>
+ 
+   <section class="result" id="result" hidden>
+     <video id="player" controls playsinline></video>
+-    <p><a id="download" href="#" download>Download MP4</a></p>
++    <p>
++      <a id="download" href="#" download>Download MP4</a>
++      <a id="download-card" href="#" download hidden>Download title card</a>
++    </p>
+   </section>
+ 
+   <section class="recent-outputs">
+     <h2>Recent outputs</h2>
+     {% if recent_outputs %}
+     <ul class="source-list">
+       {% for o in recent_outputs %}
+       <li>
+         <span>{{ o.name }}</span>
+         <span class="meta">{{ o.size_bytes }} bytes</span>
+diff --git a/tests/web/test_api.py b/tests/web/test_api.py
+index 92d2a37..6203c9d 100644
+--- a/tests/web/test_api.py
++++ b/tests/web/test_api.py
+@@ -207,20 +207,33 @@ def test_media_output_serves_png(tmp_path, monkeypatch):
+     _login(c)
+     settings = c.app.state.settings
+     settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+     (settings.outputs_dir / "story-card.png").write_bytes(b"png-bytes")
+     r = c.get("/media/outputs/story-card.png")
+     assert r.status_code == 200
+     assert r.content == b"png-bytes"
+     assert "image/png" in r.headers.get("content-type", "")
+ 
+ 
++def test_generate_page_has_hidden_title_card_download(tmp_path, monkeypatch):
++    async def fake_voices():
++        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
++
++    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    r = c.get("/")
++    assert r.status_code == 200
++    assert 'id="download-card"' in r.text
++    assert "Download title card" in r.text
++
++
+ def test_generate_page_lists_recent_outputs(tmp_path, monkeypatch):
+     async def fake_voices():
+         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+ 
+     monkeypatch.setattr(
+         "roblox_viral.web.app.list_english_voices", fake_voices
+     )
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
+     settings = c.app.state.settings
