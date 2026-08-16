@@ -11,6 +11,7 @@ from typing import Literal
 from pathlib import Path
 
 from roblox_viral.captions import write_ass
+from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
 from roblox_viral.reddit_clips import plan_reddit_clips
 from roblox_viral.render import (
     build_reddit_background,
@@ -248,6 +249,13 @@ class JobManager:
             self._set_status(settings, record, "captioning")
             write_ass(words, ass_path, sentences=sentences)
 
+            title_card_path: Path | None = None
+            title_card_until_s: float | None = None
+            if record.mode == "reddit":
+                title_card_until_s = first_sentence_end_s(sentences, words)
+                title_card_path = job_dir / "reddit_card.png"
+                render_reddit_card(sentences[0], title_card_path)
+
             self._set_status(settings, record, "rendering")
             if record.ephemeral:
                 media_path = (job_dir / record.source_name).resolve()
@@ -289,13 +297,18 @@ class JobManager:
                     work_dir=job_dir,
                 )
             else:
+                overlay_path = (
+                    None if record.mode == "reddit" else settings.overlay_video_path
+                )
                 render_video(
                     video_path=media_path,
                     audio_path=narration_path,
                     ass_path=ass_path,
                     output_path=output_path,
                     work_dir=job_dir,
-                    overlay_path=settings.overlay_video_path,
+                    overlay_path=overlay_path,
+                    title_card_path=title_card_path,
+                    title_card_until_s=title_card_until_s,
                     video_speed=record.video_speed,
                 )
 
