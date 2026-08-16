@@ -13,12 +13,12 @@ DEFAULT_REDDIT_USERNAME = "Resident_Vehicle2780"
 CARD_WIDTH = 972
 CARD_BG = (26, 26, 27, 255)
 
-_PADDING = 24
-_AVATAR_SIZE = 40
-_HEADER_HEIGHT = 40
-_TITLE_GAP = 18
-_BOTTOM_PADDING = 28
-_TITLE_SPACING = 8
+_PADDING = 48
+_AVATAR_SIZE = 80
+_HEADER_HEIGHT = 80
+_TITLE_GAP = 36
+_BOTTOM_PADDING = 56
+_TITLE_SPACING = 16
 
 
 def first_sentence_end_s(
@@ -98,9 +98,9 @@ def render_reddit_card(
     )
     avatar = _load_avatar(avatar_file)
 
-    username_font = _font(19, bold=True)
-    meta_font = _font(18)
-    title_font = _font(34, bold=True)
+    username_font = _font(38, bold=True)
+    meta_font = _font(36)
+    title_font = _font(68, bold=True)
     lines = _wrap_text(title, title_font, CARD_WIDTH - 2 * _PADDING)
     title_bbox = title_font.getbbox("Ag")
     line_height = title_bbox[3] - title_bbox[1]
@@ -113,22 +113,22 @@ def render_reddit_card(
     draw = ImageDraw.Draw(image)
     image.alpha_composite(avatar, (_PADDING, _PADDING))
 
-    header_x = _PADDING + _AVATAR_SIZE + 12
-    header_y = _PADDING + 9
+    header_x = _PADDING + _AVATAR_SIZE + 24
+    header_y = _PADDING + 18
     draw.text((header_x, header_y), username, font=username_font, fill="white")
     username_width = draw.textlength(username, font=username_font)
     draw.text(
-        (header_x + username_width + 10, header_y + 1),
+        (header_x + username_width + 20, header_y + 2),
         "3d",
         font=meta_font,
         fill=(129, 131, 132, 255),
     )
 
-    menu_x = CARD_WIDTH - _PADDING - 4
+    menu_x = CARD_WIDTH - _PADDING - 8
     menu_y = _PADDING + _HEADER_HEIGHT // 2
-    for offset in (-7, 0, 7):
+    for offset in (-14, 0, 14):
         draw.ellipse(
-            (menu_x - 2, menu_y + offset - 2, menu_x + 2, menu_y + offset + 2),
+            (menu_x - 4, menu_y + offset - 4, menu_x + 4, menu_y + offset + 4),
             fill=(215, 218, 220, 255),
         )
 

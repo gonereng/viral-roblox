@@ -2,8 +2,19 @@
 
 from PIL import Image
 
+from roblox_viral import reddit_card as rc
 from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
 from roblox_viral.voice import WordTiming
+
+
+def test_reddit_card_layout_constants_are_scaled():
+    assert rc.CARD_WIDTH == 972
+    assert rc._AVATAR_SIZE == 80
+    assert rc._PADDING == 48
+    assert rc._HEADER_HEIGHT == 80
+    assert rc._TITLE_GAP == 36
+    assert rc._BOTTOM_PADDING == 56
+    assert rc._TITLE_SPACING == 16
 
 
 def test_first_sentence_end_s():
@@ -30,5 +41,5 @@ def test_render_reddit_card_writes_png(tmp_path):
     assert path.is_file()
     with Image.open(path) as image:
         assert image.size[0] == 972
-        assert image.size[1] > 80
+        assert image.size[1] > 160  # taller than old ~80+ header
         assert image.mode in ("RGBA", "RGB")
