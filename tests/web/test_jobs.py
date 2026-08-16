@@ -546,6 +546,59 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
     assert mgr.get(job.id, s).status == "done"
 
 
+def test_run_reddit_scales_plan_target_by_video_speed(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "one.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    seen = {}
+
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_probe(path):
+        return 12.0 if Path(path).name == "narration.mp3" else 8.0
+
+    def fake_plan(paths, target_seconds, *, durations):
+        seen["target_seconds"] = target_seconds
+        return ["planned-segment"]
+
+    def fake_build(segments, output_path, *, work_dir=None):
+        Path(output_path).write_bytes(b"background")
+
+    def fake_render_video(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr(
+        jobs_module, "probe_duration_seconds", fake_probe, raising=False
+    )
+    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
+    monkeypatch.setattr(
+        jobs_module, "build_reddit_background", fake_build, raising=False
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(
+        s,
+        "",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        mode="reddit",
+        video_speed=200,
+    )
+    mgr.run_job(s, job.id)
+
+    assert seen["target_seconds"] == 24.0
+    assert mgr.get(job.id, s).status == "done"
+
+
 def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     (s.videos_dir / "one.mp4").write_bytes(b"vid")
@@ -607,6 +660,65 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
     assert str(seen["render"]["title_card_path"]).endswith("reddit_card.png")
     assert seen["render"]["title_card_until_s"] == 0.5
     assert mgr.get(job.id, s).status == "done"
+
+
+def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "one.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 500)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_probe(path):
+        return 12.0 if Path(path).name == "narration.mp3" else 8.0
+
+    def fake_plan(paths, target_seconds, *, durations):
+        return ["planned-segment"]
+
+    def fake_build(segments, output_path, *, work_dir=None):
+        Path(output_path).write_bytes(b"background")
+
+    def fake_render_reddit_card(title, output_path):
+        Path(output_path).write_bytes(b"png-card")
+
+    def fake_render_video(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr(
+        jobs_module, "probe_duration_seconds", fake_probe, raising=False
+    )
+    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
+    monkeypatch.setattr(
+        jobs_module, "build_reddit_background", fake_build, raising=False
+    )
+    monkeypatch.setattr(
+        jobs_module, "render_reddit_card", fake_render_reddit_card, raising=False
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
+    mgr.run_job(s, job.id)
+
+    job = mgr.get(job.id, s)
+    assert job is not None
+    assert job.title_card_name is not None
+    assert job.title_card_name.endswith("-card.png")
+    card_path = s.outputs_dir / job.title_card_name
+    assert card_path.is_file()
+    assert card_path.read_bytes() == b"png-card"
+
+    loaded = JobManager().get(job.id, s)
+    assert loaded is not None
+    assert loaded.title_card_name == job.title_card_name
 
 
 def test_run_single_still_uses_greenscreen(tmp_path, monkeypatch):

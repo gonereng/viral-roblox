@@ -510,7 +510,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid path")
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Not found")
-        return FileResponse(path, media_type="video/mp4", filename=safe)
+        return FileResponse(
+            path,
+            media_type=media_type_for_name(safe),
+            filename=safe,
+        )
 
     def _library_media_response(resolve, settings: Settings, name: str) -> FileResponse:
         try:

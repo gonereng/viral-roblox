@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -82,6 +83,7 @@ class JobRecord:
     stem: str | None = None
     created_slices: list[str] | None = None
     ephemeral: bool = False
+    title_card_name: str | None = None
 
 
 class JobManager:
@@ -207,6 +209,7 @@ class JobManager:
                 stem=data.get("stem"),
                 created_slices=data.get("created_slices"),
                 ephemeral=bool(data.get("ephemeral", False)),
+                title_card_name=data.get("title_card_name"),
             )
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
@@ -273,9 +276,11 @@ class JobManager:
                     for video_path in videos
                 }
                 narration_duration = probe_duration_seconds(narration_path)
+                # setpts shortens wall-clock playback; plan enough source to cover audio
+                plan_target = narration_duration * (record.video_speed / 100.0)
                 segments = plan_reddit_clips(
                     videos,
-                    narration_duration,
+                    plan_target,
                     durations=durations,
                 )
                 media_path = job_dir / "reddit_bg.mp4"
@@ -313,6 +318,11 @@ class JobManager:
                 )
 
             record.output_name = output_name
+            if record.mode == "reddit" and title_card_path is not None:
+                card_out_name = f"{Path(output_name).stem}-card.png"
+                settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(title_card_path, settings.outputs_dir / card_out_name)
+                record.title_card_name = card_out_name
             self._set_status(settings, record, "done")
         except Exception as exc:
             record.error = str(exc)

@@ -202,6 +202,18 @@ def test_media_output_requires_auth_and_serves_file(tmp_path, monkeypatch):
     assert r.content == b"video-bytes"
 
 
+def test_media_output_serves_png(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    settings = c.app.state.settings
+    settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+    (settings.outputs_dir / "story-card.png").write_bytes(b"png-bytes")
+    r = c.get("/media/outputs/story-card.png")
+    assert r.status_code == 200
+    assert r.content == b"png-bytes"
+    assert "image/png" in r.headers.get("content-type", "")
+
+
 def test_generate_page_lists_recent_outputs(tmp_path, monkeypatch):
     async def fake_voices():
         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
