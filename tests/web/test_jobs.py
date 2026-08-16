@@ -621,8 +621,10 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
     def fake_build(segments, output_path, *, work_dir=None):
         Path(output_path).write_bytes(b"background")
 
-    def fake_render_reddit_card(title, output_path):
-        seen["card"] = (title, Path(output_path))
+    def fake_render_reddit_card(title, output_path, *, scale=2.0):
+        seen.setdefault("cards", []).append(
+            (title, Path(output_path), scale)
+        )
         Path(output_path).write_bytes(b"png")
 
     def fake_first_sentence_end_s(sentences, words):
@@ -654,8 +656,10 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
     job = mgr.create(s, "", story, "en-US-EmmaNeural", mode="reddit")
     mgr.run_job(s, job.id)
 
-    assert seen["card"][0] == "First sentence here."
-    assert seen["card"][1] == s.jobs_dir / job.id / "reddit_card.png"
+    assert seen["cards"][0][0] == "First sentence here."
+    assert seen["cards"][0][1] == s.jobs_dir / job.id / "reddit_card.png"
+    assert seen["cards"][0][2] == 1.0
+    assert seen["cards"][1][2] == 2.0
     assert seen["render"]["overlay_path"] is None
     assert str(seen["render"]["title_card_path"]).endswith("reddit_card.png")
     assert seen["render"]["title_card_until_s"] == 0.5
@@ -683,7 +687,7 @@ def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
     def fake_build(segments, output_path, *, work_dir=None):
         Path(output_path).write_bytes(b"background")
 
-    def fake_render_reddit_card(title, output_path):
+    def fake_render_reddit_card(title, output_path, *, scale=2.0):
         Path(output_path).write_bytes(b"png-card")
 
     def fake_render_video(**kwargs):

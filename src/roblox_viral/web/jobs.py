@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -254,10 +253,18 @@ class JobManager:
 
             title_card_path: Path | None = None
             title_card_until_s: float | None = None
+            title_card_download_name: str | None = None
             if record.mode == "reddit":
                 title_card_until_s = first_sentence_end_s(sentences, words)
                 title_card_path = job_dir / "reddit_card.png"
-                render_reddit_card(sentences[0], title_card_path)
+                render_reddit_card(sentences[0], title_card_path, scale=1.0)
+                title_card_download_name = f"{Path(output_name).stem}-card.png"
+                settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+                render_reddit_card(
+                    sentences[0],
+                    settings.outputs_dir / title_card_download_name,
+                    scale=2.0,
+                )
 
             self._set_status(settings, record, "rendering")
             if record.ephemeral:
@@ -318,11 +325,8 @@ class JobManager:
                 )
 
             record.output_name = output_name
-            if record.mode == "reddit" and title_card_path is not None:
-                card_out_name = f"{Path(output_name).stem}-card.png"
-                settings.outputs_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(title_card_path, settings.outputs_dir / card_out_name)
-                record.title_card_name = card_out_name
+            if record.mode == "reddit" and title_card_download_name is not None:
+                record.title_card_name = title_card_download_name
             self._set_status(settings, record, "done")
         except Exception as exc:
             record.error = str(exc)

@@ -68,7 +68,7 @@ On **Generate**, pick a background mode via three tabs:
 | **Picture** | Pick an image from Library → Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
 | **Reddit** | No source picker — auto-concat random clips from Library → Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Requires at least one video in the Videos pool. |
 
-**Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The card is rendered at ~2× scale and can be downloaded from the result panel after a Reddit job completes. The subscribe greenscreen overlay is not used for Reddit yet.
+**Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The in-video card uses the original (1×) size; a larger (~2×) PNG can be downloaded from the result panel after a Reddit job completes. The subscribe greenscreen overlay is not used for Reddit yet.
 
 The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080×1920 frame** (2× the former half-height target), chromakeyed, and centered. Applies to **Single** only.
 
