@@ -58,6 +58,8 @@ Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story p
 | **Videos** | Upload full clips as-is, no slicing (`media/videos/`) |
 | **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
 
+Library lists include inline preview (video controls with no preload; lazy images).
+
 On **Generate**, pick a background mode via three tabs:
 
 | Tab | Behavior |

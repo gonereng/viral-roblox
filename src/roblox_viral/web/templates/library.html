@@ -57,6 +57,10 @@
           <input type="hidden" name="name" value="{{ source.name }}">
           <button type="submit">Delete <span class="visually-hidden">{{ source.name }}</span></button>
         </form>
+        <div class="source-preview">
+          <video controls playsinline preload="none"
+                 src="/media/sources/{{ source.name }}"></video>
+        </div>
       </li>
       {% endfor %}
     </ul>
@@ -87,6 +91,10 @@
           <input type="hidden" name="name" value="{{ video.name }}">
           <button type="submit">Delete <span class="visually-hidden">{{ video.name }}</span></button>
         </form>
+        <div class="source-preview">
+          <video controls playsinline preload="none"
+                 src="/media/videos/{{ video.name }}"></video>
+        </div>
       </li>
       {% endfor %}
     </ul>
@@ -116,6 +124,10 @@
         <button type="button" class="image-delete" data-name="{{ image.name }}">
           Delete <span class="visually-hidden">{{ image.name }}</span>
         </button>
+        <div class="source-preview">
+          <img src="/media/images/{{ image.name }}"
+               alt="{{ image.name }}" loading="lazy">
+        </div>
       </li>
       {% endfor %}
     </ul>

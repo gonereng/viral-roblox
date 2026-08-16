@@ -129,3 +129,25 @@ def test_media_library_routes_404_and_400(tmp_path, monkeypatch):
     assert client.get("/media/videos/missing.mp4").status_code == 404
     assert client.get("/media/sources/not!!valid.mp4").status_code == 400
     assert client.get("/media/images/not-a-path.jpg").status_code == 404
+
+
+def test_library_page_embeds_inline_previews(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _login(client)
+    settings = client.app.state.settings
+    settings.sources_dir.mkdir(parents=True, exist_ok=True)
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    settings.images_dir.mkdir(parents=True, exist_ok=True)
+    (settings.sources_dir / "slice.mp4").write_bytes(b"s")
+    (settings.videos_dir / "raw.mp4").write_bytes(b"v")
+    (settings.images_dir / "pic.png").write_bytes(b"i")
+
+    page = client.get("/library")
+    assert page.status_code == 200
+    assert 'preload="none"' in page.text
+    assert 'src="/media/sources/slice.mp4"' in page.text
+    assert 'src="/media/videos/raw.mp4"' in page.text
+
+    images = client.get("/library?tab=images")
+    assert 'src="/media/images/pic.png"' in images.text
+    assert 'loading="lazy"' in images.text
