@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 from roblox_viral.captions import partition_words_by_sentences
 from roblox_viral.voice import WordTiming
 
-DEFAULT_REDDIT_USERNAME = "Resident_Vehicle2780"
+DEFAULT_REDDIT_USERNAME = "jacques.guddebuer"
 CARD_WIDTH = 864  # ~80% of 1080
 CARD_BG = (26, 26, 27, 255)
 
