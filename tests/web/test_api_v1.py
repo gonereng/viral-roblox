@@ -495,3 +495,132 @@ def test_download_unknown_404(tmp_path, monkeypatch):
         headers=_headers(),
     )
     assert r.status_code == 404
+
+
+def test_create_reddit_rejects_story_without_hook_dash(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "reddit",
+        },
+    )
+    assert r.status_code == 400
+    assert "phrase - phrase" in r.json()["detail"]
+
+
+def test_cover_requires_api_key(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.get("/api/v1/videos/" + "a" * 32 + "/cover")
+    assert r.status_code == 401
+
+
+def test_cover_done_returns_png(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        rec.title_card_name = f"{job_id}-card.png"
+        settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+        (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+        (settings.outputs_dir / rec.title_card_name).write_bytes(b"png-bytes")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    job_id = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Top - Bottom.\n",
+            "type": "reddit",
+        },
+    ).json()["id"]
+    r = c.get(f"/api/v1/videos/{job_id}/cover", headers=_headers())
+    assert r.status_code == 200
+    assert r.content == b"png-bytes"
+    assert "image/png" in r.headers.get("content-type", "")
+
+
+def test_cover_not_ready_409(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    mgr: JobManager = c.app.state.job_manager
+    rec = mgr.create(
+        settings, "", "Top - Bottom.\n", "en-US-EmmaNeural", mode="reddit"
+    )
+    with mgr._lock:
+        mgr._active_id = None
+    r = c.get(f"/api/v1/videos/{rec.id}/cover", headers=_headers())
+    assert r.status_code == 409
+
+
+def test_cover_error_422(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+    mgr: JobManager = c.app.state.job_manager
+    rec = mgr.create(
+        settings, "", "Top - Bottom.\n", "en-US-EmmaNeural", mode="reddit"
+    )
+    rec.status = "error"
+    rec.error = "boom"
+    with mgr._lock:
+        mgr._active_id = None
+    r = c.get(f"/api/v1/videos/{rec.id}/cover", headers=_headers())
+    assert r.status_code == 422
+
+
+def test_cover_single_done_404(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    job_id = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "single",
+            "source_name": "clip.mp4",
+        },
+    ).json()["id"]
+    r = c.get(f"/api/v1/videos/{job_id}/cover", headers=_headers())
+    assert r.status_code == 404
+
+
+def test_cover_unknown_404(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    r = c.get(
+        "/api/v1/videos/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cover",
+        headers=_headers(),
+    )
+    assert r.status_code == 404
