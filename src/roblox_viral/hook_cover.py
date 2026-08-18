@@ -40,9 +40,10 @@ def _draw_box(
     inner_w = (x2 - x1) - 2 * BOX_INSET
     inner_h = (y2 - y1) - 2 * BOX_INSET
     font = _font(_MIN_FONT, bold=True)
-    lines = [text]
-    spacing = 4
-    line_h = _MIN_FONT
+    lines = _wrap_text(text, font, inner_w)
+    spacing = max(4, _MIN_FONT // 8)
+    bbox = font.getbbox("Ag")
+    line_h = bbox[3] - bbox[1]
     for size in range(_MAX_FONT, _MIN_FONT - 1, -2):
         candidate = _font(size, bold=True)
         wrapped = _wrap_text(text, candidate, inner_w)

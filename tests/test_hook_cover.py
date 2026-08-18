@@ -5,11 +5,14 @@ from PIL import Image, ImageDraw
 
 from roblox_viral.hook_cover import (
     BOX_BOTTOM,
+    BOX_INSET,
     BOX_TOP,
     HOOK_ERROR,
+    _MIN_FONT,
     render_hook_cover,
     split_hook,
 )
+from roblox_viral.reddit_card import _font, _wrap_text
 
 
 def test_split_hook_valid():
@@ -60,6 +63,29 @@ def test_render_hook_cover_paints_both_boxes(tmp_path):
         assert painted.size == (1080, 1920)
         assert _box_pixels(painted, BOX_TOP) != _box_pixels(blank, BOX_TOP)
         assert _box_pixels(painted, BOX_BOTTOM) != _box_pixels(blank, BOX_BOTTOM)
+
+
+def _text_row_ys(image: Image.Image, box: tuple[int, int, int, int]) -> list[int]:
+    x1, y1, x2, y2 = box
+    crop = image.crop((x1 + BOX_INSET, y1 + BOX_INSET, x2 - BOX_INSET, y2 - BOX_INSET))
+    rows: list[int] = []
+    for y in range(crop.height):
+        if any(pixel[0] > 200 for pixel in crop.crop((0, y, crop.width, y + 1)).getdata()):
+            rows.append(y)
+    return rows
+
+
+def test_render_hook_cover_wraps_long_text_at_min_font(tmp_path):
+    template = _blank_template(tmp_path / "tpl.png")
+    out = tmp_path / "cover.png"
+    long_text = " ".join(["word"] * 30)
+    inner_w = (BOX_TOP[2] - BOX_TOP[0]) - 2 * BOX_INSET
+    min_font = _font(_MIN_FONT, bold=True)
+    assert len(_wrap_text(long_text, min_font, inner_w)) > 1
+    render_hook_cover(long_text, "short", out, template_path=template)
+    with Image.open(out) as painted:
+        rows = _text_row_ys(painted, BOX_TOP)
+        assert max(rows) - min(rows) > _MIN_FONT
 
 
 def test_render_hook_cover_missing_template_raises(tmp_path):
