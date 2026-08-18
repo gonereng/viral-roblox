@@ -42,16 +42,18 @@ def _render_text_block(
     if not lines:
         return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
     measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-    heights = _line_heights(measure, lines, font)
+    line_bboxes = [measure.textbbox((0, 0), line, font=font) for line in lines]
+    heights = [bbox[3] - bbox[1] for bbox in line_bboxes]
     block_w = max(int(measure.textlength(line, font=font)) for line in lines)
-    block_h = int(_block_height_from_heights(heights, spacing))
-    layer = Image.new("RGBA", (block_w, block_h), (0, 0, 0, 0))
+    content_h = int(_block_height_from_heights(heights, spacing))
+    top_pad = max(bbox[1] for bbox in line_bboxes)
+    layer = Image.new("RGBA", (block_w, content_h + top_pad), (0, 0, 0, 0))
     layer_draw = ImageDraw.Draw(layer)
-    y = 0
-    for line, lh in zip(lines, heights, strict=True):
+    y = top_pad
+    for line, bbox, lh in zip(lines, line_bboxes, heights, strict=True):
         w = layer_draw.textlength(line, font=font)
         x = (block_w - w) / 2
-        layer_draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+        layer_draw.text((x, y - bbox[1]), line, font=font, fill=(255, 255, 255, 255))
         y += lh + spacing
     alpha_bbox = layer.split()[3].getbbox()
     if alpha_bbox:
