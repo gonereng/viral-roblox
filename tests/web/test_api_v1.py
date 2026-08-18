@@ -251,7 +251,7 @@ def test_create_reddit_with_story_voice_type(tmp_path, monkeypatch):
         headers=_headers(),
         data={
             "voice": "en-US-EmmaNeural",
-            "story": "Hi.\n",
+            "story": "Hi - there.\n",
             "type": "reddit",
         },
     )
@@ -270,7 +270,7 @@ def test_create_reddit_rejects_media(tmp_path, monkeypatch):
         headers=_headers(),
         data={
             "voice": "en-US-EmmaNeural",
-            "story": "Hi.\n",
+            "story": "Hi - there.\n",
             "type": "reddit",
         },
         files={"media": ("clip.mp4", b"x", "video/mp4")},
@@ -289,7 +289,7 @@ def test_create_reddit_rejects_source_name(tmp_path, monkeypatch):
         headers=_headers(),
         data={
             "voice": "en-US-EmmaNeural",
-            "story": "Hi.\n",
+            "story": "Hi - there.\n",
             "type": "reddit",
             "source_name": "clip.mp4",
         },

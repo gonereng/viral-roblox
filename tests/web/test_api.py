@@ -389,7 +389,7 @@ def test_create_job_reddit_mode(tmp_path, monkeypatch):
         json={
             "mode": "reddit",
             "source_name": "",
-            "story": "Hi there.\n",
+            "story": "Hi - there.\n",
             "voice": "en-US-EmmaNeural",
         },
     )
