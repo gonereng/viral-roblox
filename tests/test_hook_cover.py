@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
+import roblox_viral.hook_cover as hook_cover
 from roblox_viral.hook_cover import (
     BOX_BOTTOM,
     BOX_INSET,
@@ -63,6 +64,26 @@ def test_render_hook_cover_paints_both_boxes(tmp_path):
         assert painted.size == (1080, 1920)
         assert _box_pixels(painted, BOX_TOP) != _box_pixels(blank, BOX_TOP)
         assert _box_pixels(painted, BOX_BOTTOM) != _box_pixels(blank, BOX_BOTTOM)
+
+
+def test_packaged_template_boxes_are_inside_and_receive_text(tmp_path):
+    template = hook_cover.default_template_path()
+    assert template.is_file()
+
+    out = tmp_path / "cover.png"
+    with Image.open(template) as untouched:
+        boxes = hook_cover.boxes_for(untouched.size)
+        width, height = untouched.size
+        for x1, y1, x2, y2 in boxes:
+            assert x1 >= 0
+            assert y1 >= 0
+            assert x2 <= width
+            assert y2 <= height
+
+        render_hook_cover("Hello world", "Second phrase", out, template_path=template)
+        with Image.open(out) as painted:
+            for box in boxes:
+                assert _box_pixels(painted, box) != _box_pixels(untouched, box)
 
 
 def _inset_region(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:

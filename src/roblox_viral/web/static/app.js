@@ -73,6 +73,7 @@
   const singleBlock = document.getElementById("single-source-block");
   const pictureBlock = document.getElementById("picture-source-block");
   const redditBlock = document.getElementById("reddit-source-block");
+  const redditHookHint = document.getElementById("reddit-hook-hint");
   const sourceSelect = document.getElementById("source_name");
   const imageSelect = document.getElementById("image_name");
   const kenBurnsEl = document.getElementById("ken_burns");
@@ -97,6 +98,7 @@
     if (singleBlock) singleBlock.hidden = mode !== "single";
     if (pictureBlock) pictureBlock.hidden = !isPicture;
     if (redditBlock) redditBlock.hidden = mode !== "reddit";
+    if (redditHookHint) redditHookHint.hidden = mode !== "reddit";
     if (videoSpeedField) videoSpeedField.hidden = isPicture;
     for (const tab of modeTabs) {
       const selected = tab.dataset.mode === mode;

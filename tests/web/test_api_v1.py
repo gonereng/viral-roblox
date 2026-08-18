@@ -553,6 +553,28 @@ def test_cover_done_returns_png(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert r.content == b"png-bytes"
     assert "image/png" in r.headers.get("content-type", "")
+    assert f'filename="{job_id}-card.png"' in r.headers.get(
+        "content-disposition", ""
+    )
+
+
+def test_cover_done_with_missing_png_returns_404(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+    mgr: JobManager = c.app.state.job_manager
+    rec = mgr.create(
+        settings, "", "Top - Bottom.\n", "en-US-EmmaNeural", mode="reddit"
+    )
+    rec.status = "done"
+    rec.output_name = f"{rec.id}.mp4"
+    rec.title_card_name = f"{rec.id}-card.png"
+    with mgr._lock:
+        mgr._active_id = None
+
+    r = c.get(f"/api/v1/videos/{rec.id}/cover", headers=_headers())
+    assert r.status_code == 404
 
 
 def test_cover_not_ready_409(tmp_path, monkeypatch):

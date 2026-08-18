@@ -49,9 +49,12 @@
       <p>Uses random clips from Library → Videos</p>
     </div>
 
+    <p id="reddit-hook-hint" hidden>
+      For Reddit, the first story line must be <code>phrase - phrase</code> (exactly one <code>-</code>).
+    </p>
     <label>
       Story
-      <textarea id="story" name="story" rows="10" required placeholder="One sentence per line."></textarea>
+      <textarea id="story" name="story" rows="10" required aria-describedby="reddit-hook-hint" placeholder="One sentence per line."></textarea>
     </label>
     <div class="story-actions">
       <button id="generate-story-btn" type="button">Generate story</button>

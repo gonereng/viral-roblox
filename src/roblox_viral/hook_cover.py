@@ -9,23 +9,26 @@ from PIL import Image, ImageDraw, ImageFont
 from roblox_viral.reddit_card import _font, _wrap_text
 
 HOOK_ERROR = 'First line must be "phrase - phrase"'
-BOX_TOP = (200, 335, 880, 520)
-BOX_BOTTOM = (200, 1400, 880, 1600)
+DESIGN_SIZE = (1080, 1920)
+BOX_TOP = (117, 210, 962, 468)
+BOX_BOTTOM = (117, 1447, 962, 1726)
 BOX_INSET = 16
 _MAX_FONT = 56
 _MIN_FONT = 8
 
 
-def _line_heights(
-    draw: ImageDraw.ImageDraw,
-    lines: list[str],
-    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-) -> list[int]:
-    heights: list[int] = []
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        heights.append(bbox[3] - bbox[1])
-    return heights
+def boxes_for(
+    size: tuple[int, int],
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    width, height = size
+    sx = width / DESIGN_SIZE[0]
+    sy = height / DESIGN_SIZE[1]
+
+    def scale(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        x1, y1, x2, y2 = box
+        return (int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy))
+
+    return scale(BOX_TOP), scale(BOX_BOTTOM)
 
 
 def _block_height_from_heights(heights: list[int], spacing: int) -> float:
@@ -89,10 +92,11 @@ def _draw_box(
     image: Image.Image,
     text: str,
     box: tuple[int, int, int, int],
+    inset: int,
 ) -> None:
     x1, y1, x2, y2 = box
-    inner_w = (x2 - x1) - 2 * BOX_INSET
-    inner_h = (y2 - y1) - 2 * BOX_INSET
+    inner_w = (x2 - x1) - 2 * inset
+    inner_h = (y2 - y1) - 2 * inset
     if not text:
         return
 
@@ -112,8 +116,8 @@ def _draw_box(
         spacing = max(4, _MIN_FONT // 8)
         layer = _scale_to_fit(_render_text_block(lines, font, spacing), inner_w, inner_h)
 
-    paste_x = x1 + BOX_INSET + (inner_w - layer.width) // 2
-    paste_y = y1 + BOX_INSET + (inner_h - layer.height) // 2
+    paste_x = x1 + inset + (inner_w - layer.width) // 2
+    paste_y = y1 + inset + (inner_h - layer.height) // 2
     image.paste(layer, (paste_x, paste_y), layer)
 
 
@@ -129,8 +133,12 @@ def render_hook_cover(
         raise FileNotFoundError(f"Cover template not found: {template}")
     with Image.open(template) as src:
         image = src.convert("RGBA")
-    _draw_box(image, top, BOX_TOP)
-    _draw_box(image, bottom, BOX_BOTTOM)
+    sx = image.width / DESIGN_SIZE[0]
+    sy = image.height / DESIGN_SIZE[1]
+    inset = max(1, round(BOX_INSET * min(sx, sy)))
+    top_box, bottom_box = boxes_for(image.size)
+    _draw_box(image, top, top_box, inset)
+    _draw_box(image, bottom, bottom_box, inset)
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     image.save(out, format="PNG")
