@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 import roblox_viral.hook_cover as hook_cover
 from roblox_viral.hook_cover import (
@@ -55,6 +55,21 @@ def _box_pixels(image: Image.Image, box: tuple[int, int, int, int]) -> list:
     return list(crop.getdata())
 
 
+def _changed_bbox(
+    before: Image.Image,
+    after: Image.Image,
+    region: tuple[int, int, int, int],
+) -> tuple[int, int, int, int] | None:
+    x1, y1, _, _ = region
+    before_crop = before.crop(region).convert("RGB")
+    after_crop = after.crop(region).convert("RGB")
+    bbox = ImageChops.difference(before_crop, after_crop).getbbox()
+    if bbox is None:
+        return None
+    bx1, by1, bx2, by2 = bbox
+    return (x1 + bx1, y1 + by1, x1 + bx2, y1 + by2)
+
+
 def test_render_hook_cover_paints_both_boxes(tmp_path):
     template = _blank_template(tmp_path / "tpl.png")
     out = tmp_path / "cover.png"
@@ -71,6 +86,9 @@ def test_packaged_template_boxes_are_inside_and_receive_text(tmp_path):
     assert template.is_file()
 
     out = tmp_path / "cover.png"
+    long_top = " ".join(["something was hiding behind the locked door"] * 12)
+    long_bottom = " ".join(["then every light in the hallway went dark"] * 12)
+    interiors = ((77, 126, 500, 237), (75, 786, 502, 913))
     with Image.open(template) as untouched:
         boxes = hook_cover.boxes_for(untouched.size)
         width, height = untouched.size
@@ -80,10 +98,24 @@ def test_packaged_template_boxes_are_inside_and_receive_text(tmp_path):
             assert x2 <= width
             assert y2 <= height
 
-        render_hook_cover("Hello world", "Second phrase", out, template_path=template)
+        scaled_inset = round(BOX_INSET * min(width / 1080, height / 1920))
+        min_font = _font(_MIN_FONT, bold=True)
+        for text, box in zip((long_top, long_bottom), boxes, strict=True):
+            inner_width = (box[2] - box[0]) - 2 * scaled_inset
+            assert len(_wrap_text(text, min_font, inner_width)) >= 3
+
+        render_hook_cover(long_top, long_bottom, out, template_path=template)
         with Image.open(out) as painted:
-            for box in boxes:
+            for box, interior in zip(boxes, interiors, strict=True):
                 assert _box_pixels(painted, box) != _box_pixels(untouched, box)
+                changed = _changed_bbox(untouched, painted, box)
+                assert changed is not None
+                cx1, cy1, cx2, cy2 = changed
+                ix1, iy1, ix2, iy2 = interior
+                assert cx1 >= ix1
+                assert cy1 >= iy1
+                assert cx2 <= ix2
+                assert cy2 <= iy2
 
 
 def _inset_region(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:

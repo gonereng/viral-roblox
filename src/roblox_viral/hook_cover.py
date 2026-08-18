@@ -10,8 +10,8 @@ from roblox_viral.reddit_card import _font, _wrap_text
 
 HOOK_ERROR = 'First line must be "phrase - phrase"'
 DESIGN_SIZE = (1080, 1920)
-BOX_TOP = (117, 210, 962, 468)
-BOX_BOTTOM = (117, 1447, 962, 1726)
+BOX_TOP = (146, 237, 946, 445)
+BOX_BOTTOM = (142, 1474, 950, 1712)
 BOX_INSET = 16
 _MAX_FONT = 56
 _MIN_FONT = 8
