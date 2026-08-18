@@ -106,9 +106,15 @@ def test_packaged_template_boxes_are_inside_and_receive_text(tmp_path):
 
         render_hook_cover(long_top, long_bottom, out, template_path=template)
         with Image.open(out) as painted:
-            for box, interior in zip(boxes, interiors, strict=True):
+            search_regions = (
+                (0, 0, width, height // 2),
+                (0, height // 2, width, height),
+            )
+            for box, interior, search_region in zip(
+                boxes, interiors, search_regions, strict=True
+            ):
                 assert _box_pixels(painted, box) != _box_pixels(untouched, box)
-                changed = _changed_bbox(untouched, painted, box)
+                changed = _changed_bbox(untouched, painted, search_region)
                 assert changed is not None
                 cx1, cy1, cx2, cy2 = changed
                 ix1, iy1, ix2, iy2 = interior
