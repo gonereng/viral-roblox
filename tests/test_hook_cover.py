@@ -93,6 +93,19 @@ def _non_background_pixels(
     return [pixel for pixel in crop.getdata() if pixel != background]
 
 
+def _text_span_y(
+    image: Image.Image,
+    region: tuple[int, int, int, int],
+) -> int:
+    crop = image.crop(region)
+    rows = [
+        y
+        for y in range(crop.height)
+        if any(pixel[0] > 200 for pixel in crop.crop((0, y, crop.width, y + 1)).getdata())
+    ]
+    return max(rows) - min(rows) if rows else 0
+
+
 def test_render_hook_cover_long_text_stays_inside_inset(tmp_path):
     template = _blank_template(tmp_path / "tpl.png")
     out = tmp_path / "cover.png"
@@ -104,9 +117,11 @@ def test_render_hook_cover_long_text_stays_inside_inset(tmp_path):
     render_hook_cover(long_top, long_bottom, out, template_path=template)
     with Image.open(out) as painted:
         for box in (BOX_TOP, BOX_BOTTOM):
+            inset = _inset_region(box)
             for region in _outside_inset_margin_regions(box):
                 assert not _non_background_pixels(painted, region)
-            assert _non_background_pixels(painted, _inset_region(box))
+            assert _non_background_pixels(painted, inset)
+            assert _text_span_y(painted, inset) > 20
 
 
 def test_render_hook_cover_missing_template_raises(tmp_path):
