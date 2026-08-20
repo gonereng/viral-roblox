@@ -66,7 +66,7 @@ On **Generate**, pick a background mode via three tabs:
 |-----|----------|
 | **Single background video** | Pick a one-minute clip from Library → 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Greenscreen overlay at start. |
 | **Picture** | Pick an image from Library → Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
-| **Reddit** | No source picker — auto-concat random clips from Library → Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Requires at least one video in the Videos pool. |
+| **Reddit** | No source picker — one library video per sentence (bag pop, reshuffle when empty). **Video speed** slider (100–500%, default 100%). Requires at least one video in the Videos pool. |
 
 **Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The in-video card uses the original (1×) size; a larger (~2×) PNG can be downloaded from the result panel after a Reddit job completes. The subscribe greenscreen overlay is not used for Reddit yet.
 
@@ -113,7 +113,7 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 **Create** — `POST /api/v1/videos` as `multipart/form-data`:
 
 - `voice`, `story`, `type` (`single`|`reddit`|`leni`; `roblox` is rejected — use `single`)
-- optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50…200, default 100)
+- optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50–200 for `single`/`leni`, 100–500 for `reddit`; default 100)
 - for `single` or `leni`: either file field `media` **or** text field `source_name` (Library clip or raw video/image name)
 - for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)
 

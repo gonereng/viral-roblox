@@ -91,6 +91,20 @@
       generateBtn.disabled = !(sourceSelect && sourceSelect.value);
     }
   }
+  const VIDEO_BOUNDS = {
+    single: { min: 50, max: 200 },
+    reddit: { min: 100, max: 500 },
+  };
+  function clampVideoSpeedForMode(mode) {
+    if (!videoSpeedInput || mode === "picture") return;
+    const b = VIDEO_BOUNDS[mode === "reddit" ? "reddit" : "single"];
+    videoSpeedInput.min = String(b.min);
+    videoSpeedInput.max = String(b.max);
+    const v = Number(videoSpeedInput.value);
+    if (v < b.min) videoSpeedInput.value = String(b.min);
+    if (v > b.max) videoSpeedInput.value = String(b.max);
+    syncVoiceSliders();
+  }
   function setMode(mode) {
     currentMode = mode;
     const isPicture = mode === "picture";
@@ -104,6 +118,7 @@
       tab.tabIndex = selected ? 0 : -1;
     }
     syncGenerateEnabled();
+    clampVideoSpeedForMode(mode);
   }
   for (const tab of modeTabs) {
     tab.addEventListener("click", () => setMode(tab.dataset.mode));
