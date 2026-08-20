@@ -1,0 +1,1104 @@
+# Review package: e6103d2e78a205d9c0ff4f3ce80823b500558737..8a11605c158eaa7f26ce0af68336246270bfcfa2
+
+## Commits
+8a11605 feat(web): mode-specific video speed slider bounds
+c497310 feat(web): Reddit background one clip per sentence
+9ca9bfd fix: pass mode into render video_speed validation
+0d2895c feat: mode-specific video_speed validation (Reddit 100-500)
+6f70631 feat: plan Reddit background clips per sentence
+
+## Files changed
+ README.md                                    |  4 +-
+ src/roblox_viral/reddit_clips.py             | 57 ++++++++++++++++++++
+ src/roblox_viral/render.py                   |  7 +--
+ src/roblox_viral/voice.py                    | 17 +++---
+ src/roblox_viral/web/api_v1.py               |  2 +-
+ src/roblox_viral/web/app.py                  |  2 +-
+ src/roblox_viral/web/jobs.py                 | 17 +++---
+ src/roblox_viral/web/static/app.js           | 15 ++++++
+ src/roblox_viral/web/templates/generate.html |  4 +-
+ tests/test_reddit_clips.py                   | 80 +++++++++++++++++++++++++++-
+ tests/test_render.py                         | 43 +++++++++++++++
+ tests/test_voice.py                          | 27 ++++++++--
+ tests/web/test_api.py                        | 15 ++++++
+ tests/web/test_api_v1.py                     | 21 ++++++++
+ tests/web/test_jobs.py                       | 59 ++++++++++++++------
+ 15 files changed, 326 insertions(+), 44 deletions(-)
+
+## Diff
+diff --git a/README.md b/README.md
+index a129829..fb23f6b 100644
+--- a/README.md
++++ b/README.md
+@@ -59,21 +59,21 @@ Browser UI with a **Library** page (three tabs), **Prompt** page (Gemini story p
+ | **Images** | Upload stills for Picture mode (jpg/png/webp; `media/images/`) |
+ 
+ Library lists include inline preview (video controls with no preload; lazy images).
+ 
+ On **Generate**, pick a background mode via three tabs:
+ 
+ | Tab | Behavior |
+ |-----|----------|
+ | **Single background video** | Pick a one-minute clip from Library â†’ 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50â€“200%, default 100%) independent of voice pitch/speed. Greenscreen overlay at start. |
+ | **Picture** | Pick an image from Library â†’ Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
+-| **Reddit** | No source picker â€” auto-concat random clips from Library â†’ Videos (`media/videos/`) to match TTS length (shuffle without reuse). **Video speed** slider. Requires at least one video in the Videos pool. |
++| **Reddit** | No source picker â€” one library video per sentence (bag pop, reshuffle when empty). **Video speed** slider (100â€“500%, default 100%). Requires at least one video in the Videos pool. |
+ 
+ **Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The in-video card uses the original (1Ã—) size; a larger (~2Ã—) PNG can be downloaded from the result panel after a Reddit job completes. The subscribe greenscreen overlay is not used for Reddit yet.
+ 
+ The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080Ã—1920 frame** (2Ã— the former half-height target), chromakeyed, and centered. Applies to **Single** only.
+ 
+ ### Local run
+ 
+ ```bash
+ # Windows
+ set APP_PASSWORD=your-password
+@@ -106,21 +106,21 @@ Optional env vars:
+ | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
+ | `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are chromakeyed, scaled to fit inside the full 1080Ã—1920 frame, centered, and composited at the start of **Single** videos (audio ignored). |
+ 
+ ### n8n API
+ 
+ Set `API_KEY` in `.env`. Header: `X-API-Key`.
+ 
+ **Create** â€” `POST /api/v1/videos` as `multipart/form-data`:
+ 
+ - `voice`, `story`, `type` (`single`|`reddit`|`leni`; `roblox` is rejected â€” use `single`)
+-- optional `pitch` (âˆ’100â€¦100, default 15), `speed` (50â€¦200, default 130), and `video_speed` (50â€¦200, default 100)
++- optional `pitch` (âˆ’100â€¦100, default 15), `speed` (50â€¦200, default 130), and `video_speed` (50â€“200 for `single`/`leni`, 100â€“500 for `reddit`; default 100)
+ - for `single` or `leni`: either file field `media` **or** text field `source_name` (Library clip or raw video/image name)
+ - for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)
+ 
+ Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`.
+ 
+ PowerShell / Windows (upload via `curl.exe` â€” works on PowerShell 5.1):
+ 
+ ```powershell
+ $apiKey = "your-key"
+ $base = "http://127.0.0.1:8000"
+diff --git a/src/roblox_viral/reddit_clips.py b/src/roblox_viral/reddit_clips.py
+index 2769628..2228331 100644
+--- a/src/roblox_viral/reddit_clips.py
++++ b/src/roblox_viral/reddit_clips.py
+@@ -1,19 +1,21 @@
+ """Plan reddit background clips by shuffling source videos."""
+ 
+ from __future__ import annotations
+ 
+ import random
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
++from roblox_viral.captions import partition_words_by_sentences
+ from roblox_viral.render import probe_duration_seconds
++from roblox_viral.voice import WordTiming
+ 
+ _EPSILON = 1e-6
+ 
+ 
+ @dataclass(frozen=True)
+ class ClipSegment:
+     path: Path
+     start_s: float  # always 0 for v1
+     duration_s: float
+ 
+@@ -53,10 +55,65 @@ def plan_reddit_clips(
+         path = bag.pop()
+         duration = _duration_for(path, durations)
+         if duration <= 0:
+             raise ValueError(f"duration must be positive for {path}")
+ 
+         use = min(duration, remaining)
+         out.append(ClipSegment(path=path, start_s=0.0, duration_s=use))
+         remaining -= use
+ 
+     return out
++
++
++def sentence_durations_s(
++    sentences: list[str], words: list[WordTiming]
++) -> list[float]:
++    groups = partition_words_by_sentences(sentences, words)
++    if len(groups) != len(sentences):
++        raise ValueError("sentence count mismatch")
++    out: list[float] = []
++    for group in groups:
++        if not group:
++            raise ValueError("sentence has no words")
++        duration = (group[-1].end_ms - group[0].start_ms) / 1000.0
++        if duration <= 0:
++            raise ValueError("sentence duration must be positive")
++        out.append(duration)
++    return out
++
++
++def plan_reddit_sentence_clips(
++    paths: list[Path],
++    sentence_durations_s: list[float],
++    *,
++    video_speed: int = 100,
++    durations: dict[Path, float] | None = None,
++    rng: random.Random | None = None,
++) -> list[ClipSegment]:
++    if not paths or not sentence_durations_s:
++        raise ValueError("paths and sentence_durations_s must be non-empty")
++    if video_speed <= 0:
++        raise ValueError("video_speed must be positive")
++
++    rng = rng or random.Random()
++    out: list[ClipSegment] = []
++    bag: list[Path] = []
++
++    for sent_dur in sentence_durations_s:
++        if sent_dur <= 0:
++            raise ValueError("sentence duration must be positive")
++        source_needed = sent_dur * (video_speed / 100.0)
++        if not bag:
++            bag = list(paths)
++            rng.shuffle(bag)
++        path = bag.pop()
++        file_duration = _duration_for(path, durations)
++        if file_duration <= 0:
++            raise ValueError(f"duration must be positive for {path}")
++
++        remaining = source_needed
++        while remaining > _EPSILON:
++            use = min(file_duration, remaining)
++            out.append(ClipSegment(path=path, start_s=0.0, duration_s=use))
++            remaining -= use
++
++    return out
+diff --git a/src/roblox_viral/render.py b/src/roblox_viral/render.py
+index 11564e6..c8eebba 100644
+--- a/src/roblox_viral/render.py
++++ b/src/roblox_viral/render.py
+@@ -146,37 +146,38 @@ def build_reddit_background(
+     return out
+ 
+ 
+ def _ass_filter_path(ass_path: Path) -> str:
+     """Escape path for ffmpeg ass filter (Windows-safe)."""
+     p = ass_path.resolve().as_posix()
+     p = p.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+     return p
+ 
+ 
+-def _playback_setpts(video_speed: int) -> str | None:
+-    validate_video_speed(video_speed)
++def _playback_setpts(video_speed: int, *, mode: str = "single") -> str | None:
++    validate_video_speed(video_speed, mode=mode)
+     if video_speed == 100:
+         return None
+     return f"setpts=100/{video_speed}*PTS"
+ 
+ 
+ def render_video(
+     *,
+     video_path: Path | str,
+     audio_path: Path | str,
+     ass_path: Path | str,
+     output_path: Path | str,
+     keep_temp: bool = False,
+     work_dir: Path | str | None = None,
+     overlay_path: Path | str | None = None,
+     video_speed: int = 100,
++    mode: str = "single",
+     title_card_path: Path | str | None = None,
+     title_card_until_s: float | None = None,
+ ) -> Path:
+     """
+     Mute + loop gameplay to match narration, crop to 1080x1920, burn ASS, mux TTS.
+ 
+     When overlay_path is set, chromakey the first OVERLAY_DURATION_S of that clip and
+     composite it centered (fit inside full frame) over captions at the start.
+ 
+     Original video audio is discarded by mapping only the TTS audio stream.
+@@ -210,21 +211,21 @@ def render_video(
+             raise RenderError(f"Title card not found: {title_card}")
+         if title_card_until_s is None or title_card_until_s <= 0:
+             raise RenderError("title_card_until_s must be greater than 0")
+ 
+     out.parent.mkdir(parents=True, exist_ok=True)
+     if work_dir is not None:
+         Path(work_dir).mkdir(parents=True, exist_ok=True)
+ 
+     audio_duration = probe_duration_seconds(audio)
+     ass_escaped = _ass_filter_path(ass)
+-    setpts = _playback_setpts(video_speed)
++    setpts = _playback_setpts(video_speed, mode=mode)
+ 
+     if overlay is None and title_card is None:
+         parts = [
+             f"scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase",
+             f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}",
+         ]
+         if setpts:
+             parts.append(setpts)
+         parts.append(f"ass='{ass_escaped}'")
+         vf = ",".join(parts)
+diff --git a/src/roblox_viral/voice.py b/src/roblox_viral/voice.py
+index d8975ad..331f9e9 100644
+--- a/src/roblox_viral/voice.py
++++ b/src/roblox_viral/voice.py
+@@ -22,30 +22,35 @@ class VoiceProvider(Protocol):
+         """Synthesize speech to output_path; return word timings."""
+         ...
+ 
+ 
+ DEFAULT_PITCH = 15
+ DEFAULT_SPEED = 130
+ PITCH_MIN, PITCH_MAX = -100, 100
+ SPEED_MIN, SPEED_MAX = 50, 200
+ 
+ DEFAULT_VIDEO_SPEED = 100
+-VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = 50, 200
++SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX = 50, 200
++REDDIT_VIDEO_SPEED_MIN, REDDIT_VIDEO_SPEED_MAX = 100, 500
++VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX
+ 
+ 
+-def validate_video_speed(percent: int) -> int:
++def validate_video_speed(percent: int, *, mode: str = "single") -> int:
+     if not isinstance(percent, int) or isinstance(percent, bool):
+         raise ValueError("video_speed must be an int")
+-    if percent < VIDEO_SPEED_MIN or percent > VIDEO_SPEED_MAX:
+-        raise ValueError(
+-            f"video_speed must be between {VIDEO_SPEED_MIN} and {VIDEO_SPEED_MAX}"
+-        )
++    m = (mode or "single").strip().lower()
++    if m == "reddit":
++        lo, hi = REDDIT_VIDEO_SPEED_MIN, REDDIT_VIDEO_SPEED_MAX
++    else:
++        lo, hi = SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX
++    if percent < lo or percent > hi:
++        raise ValueError(f"video_speed must be between {lo} and {hi}")
+     return percent
+ 
+ 
+ def format_edge_pitch(pitch: int) -> str:
+     if not isinstance(pitch, int) or isinstance(pitch, bool):
+         raise ValueError("pitch must be an int")
+     if pitch < PITCH_MIN or pitch > PITCH_MAX:
+         raise ValueError(f"pitch must be between {PITCH_MIN} and {PITCH_MAX}")
+     if pitch >= 0:
+         return f"+{pitch}Hz"
+diff --git a/src/roblox_viral/web/api_v1.py b/src/roblox_viral/web/api_v1.py
+index 9260d85..61687bd 100644
+--- a/src/roblox_viral/web/api_v1.py
++++ b/src/roblox_viral/web/api_v1.py
+@@ -95,21 +95,21 @@ async def create_video(
+ 
+     voice_s = (voice or "").strip() or DEFAULT_VOICE
+     try:
+         pitch_i = _optional_int(pitch, DEFAULT_PITCH, "pitch")
+         speed_i = _optional_int(speed, DEFAULT_SPEED, "speed")
+         video_speed_i = _optional_int(
+             video_speed, DEFAULT_VIDEO_SPEED, "video_speed"
+         )
+         format_edge_pitch(pitch_i)
+         format_edge_rate(speed_i)
+-        validate_video_speed(video_speed_i)
++        validate_video_speed(video_speed_i, mode=mode)
+     except ValueError as exc:
+         raise HTTPException(status_code=400, detail=str(exc)) from exc
+ 
+     ephemeral = False
+     input_bytes: bytes | None = None
+     stored_name = "" if mode == "reddit" else name
+ 
+     if has_media:
+         assert media is not None
+         raw_name = Path(media.filename or "upload.bin").name
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index 5ece17f..2c01a94 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -417,22 +417,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+         story = body.story
+         voice = body.voice or DEFAULT_VOICE
+         pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
+         speed = DEFAULT_SPEED if body.speed is None else body.speed
+         video_speed = (
+             DEFAULT_VIDEO_SPEED if body.video_speed is None else body.video_speed
+         )
+         try:
+             format_edge_pitch(pitch)
+             format_edge_rate(speed)
+-            validate_video_speed(video_speed)
+             mode = normalize_mode(body.mode)
++            validate_video_speed(video_speed, mode=mode)
+         except ValueError as exc:
+             raise HTTPException(status_code=400, detail=str(exc)) from exc
+         try:
+             record = mgr.create(
+                 settings,
+                 source_name,
+                 story,
+                 voice,
+                 pitch=pitch,
+                 speed=speed,
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index cbd37ac..b8211da 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -5,21 +5,24 @@ import re
+ import threading
+ import uuid
+ from dataclasses import asdict, dataclass
+ from datetime import datetime, timezone
+ from typing import Literal
+ 
+ from pathlib import Path
+ 
+ from roblox_viral.captions import write_ass
+ from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
+-from roblox_viral.reddit_clips import plan_reddit_clips
++from roblox_viral.reddit_clips import (
++    plan_reddit_sentence_clips,
++    sentence_durations_s,
++)
+ from roblox_viral.render import (
+     build_reddit_background,
+     probe_duration_seconds,
+     render_still,
+     render_video,
+ )
+ from roblox_viral.story import join_for_tts, split_sentences
+ from roblox_viral.voice import (
+     DEFAULT_PITCH,
+     DEFAULT_SPEED,
+@@ -102,22 +105,22 @@ class JobManager:
+         voice: str,
+         pitch: int = DEFAULT_PITCH,
+         speed: int = DEFAULT_SPEED,
+         video_speed: int = DEFAULT_VIDEO_SPEED,
+         mode: str = "single",
+         ken_burns: bool = False,
+         ephemeral: bool = False,
+     ) -> JobRecord:
+         format_edge_pitch(pitch)
+         format_edge_rate(speed)
+-        validate_video_speed(video_speed)
+         mode = normalize_mode(mode)
++        validate_video_speed(video_speed, mode=mode)
+         if mode == "reddit":
+             if not list_videos(settings):
+                 raise ValueError("Reddit mode requires at least one video")
+             source_name = source_name or "reddit"
+             ken_burns = False
+             ephemeral = False
+         elif ephemeral:
+             safe = Path(source_name).name
+             if safe != source_name or not safe:
+                 raise ValueError("Invalid source_name")
+@@ -275,26 +278,25 @@ class JobManager:
+                 ):
+                     raise FileNotFoundError(record.source_name)
+             elif record.mode == "picture":
+                 media_path = resolve_image(settings, record.source_name)
+             elif record.mode == "reddit":
+                 videos = [video.path for video in list_videos(settings)]
+                 durations = {
+                     video_path: probe_duration_seconds(video_path)
+                     for video_path in videos
+                 }
+-                narration_duration = probe_duration_seconds(narration_path)
+-                # setpts shortens wall-clock playback; plan enough source to cover audio
+-                plan_target = narration_duration * (record.video_speed / 100.0)
+-                segments = plan_reddit_clips(
++                sent_durations = sentence_durations_s(sentences, words)
++                segments = plan_reddit_sentence_clips(
+                     videos,
+-                    plan_target,
++                    sent_durations,
++                    video_speed=record.video_speed,
+                     durations=durations,
+                 )
+                 media_path = job_dir / "reddit_bg.mp4"
+                 build_reddit_background(
+                     segments,
+                     media_path,
+                     work_dir=job_dir,
+                 )
+             else:
+                 media_path = resolve_source(settings, record.source_name)
+@@ -315,20 +317,21 @@ class JobManager:
+                 render_video(
+                     video_path=media_path,
+                     audio_path=narration_path,
+                     ass_path=ass_path,
+                     output_path=output_path,
+                     work_dir=job_dir,
+                     overlay_path=overlay_path,
+                     title_card_path=title_card_path,
+                     title_card_until_s=title_card_until_s,
+                     video_speed=record.video_speed,
++                    mode=record.mode,
+                 )
+ 
+             record.output_name = output_name
+             if record.mode == "reddit" and title_card_download_name is not None:
+                 record.title_card_name = title_card_download_name
+             self._set_status(settings, record, "done")
+         except Exception as exc:
+             record.error = str(exc)
+             self._set_status(settings, record, "error")
+         finally:
+diff --git a/src/roblox_viral/web/static/app.js b/src/roblox_viral/web/static/app.js
+index 5734915..ab4fe7a 100644
+--- a/src/roblox_viral/web/static/app.js
++++ b/src/roblox_viral/web/static/app.js
+@@ -84,33 +84,48 @@
+   function syncGenerateEnabled() {
+     if (!generateBtn) return;
+     if (currentMode === "picture") {
+       generateBtn.disabled = !imageSelectHasValue();
+     } else if (currentMode === "reddit") {
+       generateBtn.disabled = !hasVideos;
+     } else {
+       generateBtn.disabled = !(sourceSelect && sourceSelect.value);
+     }
+   }
++  const VIDEO_BOUNDS = {
++    single: { min: 50, max: 200 },
++    reddit: { min: 100, max: 500 },
++  };
++  function clampVideoSpeedForMode(mode) {
++    if (!videoSpeedInput || mode === "picture") return;
++    const b = VIDEO_BOUNDS[mode === "reddit" ? "reddit" : "single"];
++    videoSpeedInput.min = String(b.min);
++    videoSpeedInput.max = String(b.max);
++    const v = Number(videoSpeedInput.value);
++    if (v < b.min) videoSpeedInput.value = String(b.min);
++    if (v > b.max) videoSpeedInput.value = String(b.max);
++    syncVoiceSliders();
++  }
+   function setMode(mode) {
+     currentMode = mode;
+     const isPicture = mode === "picture";
+     if (singleBlock) singleBlock.hidden = mode !== "single";
+     if (pictureBlock) pictureBlock.hidden = !isPicture;
+     if (redditBlock) redditBlock.hidden = mode !== "reddit";
+     if (videoSpeedField) videoSpeedField.hidden = isPicture;
+     for (const tab of modeTabs) {
+       const selected = tab.dataset.mode === mode;
+       tab.setAttribute("aria-selected", String(selected));
+       tab.tabIndex = selected ? 0 : -1;
+     }
+     syncGenerateEnabled();
++    clampVideoSpeedForMode(mode);
+   }
+   for (const tab of modeTabs) {
+     tab.addEventListener("click", () => setMode(tab.dataset.mode));
+     tab.addEventListener("keydown", (event) => {
+       const currentIndex = modeTabs.indexOf(tab);
+       let nextIndex;
+       if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % modeTabs.length;
+       if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + modeTabs.length) % modeTabs.length;
+       if (event.key === "Home") nextIndex = 0;
+       if (event.key === "End") nextIndex = modeTabs.length - 1;
+diff --git a/src/roblox_viral/web/templates/generate.html b/src/roblox_viral/web/templates/generate.html
+index 14fc8d4..5cc817d 100644
+--- a/src/roblox_viral/web/templates/generate.html
++++ b/src/roblox_viral/web/templates/generate.html
+@@ -74,21 +74,23 @@
+       <input id="pitch" name="pitch" type="range" min="-100" max="100" step="1" value="15" />
+     </label>
+ 
+     <label class="slider-field">
+       Speed <span id="speed-value">130%</span>
+       <input id="speed" name="speed" type="range" min="50" max="200" step="1" value="130" />
+     </label>
+ 
+     <label class="slider-field" id="video-speed-field">
+       Video speed <span id="video-speed-value">100%</span>
+-      <input id="video_speed" name="video_speed" type="range" min="50" max="200" step="1" value="100" />
++      <input id="video_speed" name="video_speed" type="range" min="50" max="200" step="1" value="100"
++             data-single-min="50" data-single-max="200"
++             data-reddit-min="100" data-reddit-max="500" />
+     </label>
+ 
+     <button id="generate-btn" type="submit"{% if not sources %} disabled{% endif %}>Generate</button>
+   </form>
+ 
+   <section class="progress" aria-live="polite">
+     <p>Status: <span id="status">idle</span></p>
+     <p id="error" class="error" hidden></p>
+   </section>
+ 
+diff --git a/tests/test_reddit_clips.py b/tests/test_reddit_clips.py
+index df1ad76..fe1d4ec 100644
+--- a/tests/test_reddit_clips.py
++++ b/tests/test_reddit_clips.py
+@@ -1,18 +1,23 @@
+ """Tests for reddit clip planning."""
+ 
+ import random
+ from pathlib import Path
+ 
+ import pytest
+ 
+-from roblox_viral.reddit_clips import plan_reddit_clips
++from roblox_viral.reddit_clips import (
++    plan_reddit_clips,
++    plan_reddit_sentence_clips,
++    sentence_durations_s,
++)
++from roblox_viral.voice import WordTiming
+ 
+ 
+ def test_plan_trims_last_clip():
+     paths = [Path("a.mp4"), Path("b.mp4")]
+     durs = {paths[0]: 10.0, paths[1]: 10.0}
+     rng = random.Random(0)
+     segs = plan_reddit_clips(paths, 15.0, durations=durs, rng=rng)
+     assert abs(sum(s.duration_s for s in segs) - 15.0) < 1e-6
+     assert segs[-1].duration_s < 10.0 or len(segs) == 2
+ 
+@@ -20,10 +25,83 @@ def test_plan_trims_last_clip():
+ def test_plan_reshuffles_when_exhausted():
+     p = Path("only.mp4")
+     segs = plan_reddit_clips([p], 25.0, durations={p: 10.0}, rng=random.Random(1))
+     assert len(segs) == 3
+     assert abs(sum(s.duration_s for s in segs) - 25.0) < 1e-6
+ 
+ 
+ def test_plan_empty_pool_errors():
+     with pytest.raises(ValueError):
+         plan_reddit_clips([], 10.0, durations={})
++
++
++def test_sentence_durations_s_from_word_groups():
++    sentences = ["Hello world.", "Second line."]
++    words = [
++        WordTiming("Hello", 0, 200),
++        WordTiming("world.", 200, 500),
++        WordTiming("Second", 500, 800),
++        WordTiming("line.", 800, 1000),
++    ]
++    durs = sentence_durations_s(sentences, words)
++    assert len(durs) == 2
++    assert abs(durs[0] - 0.5) < 1e-6
++    assert abs(durs[1] - 0.5) < 1e-6
++
++
++def test_plan_one_video_per_sentence():
++    paths = [Path("a.mp4"), Path("b.mp4"), Path("c.mp4")]
++    durs_map = {p: 30.0 for p in paths}
++    rng = random.Random(0)
++    segs = plan_reddit_sentence_clips(
++        paths,
++        [2.0, 3.0, 1.5],
++        video_speed=100,
++        durations=durs_map,
++        rng=rng,
++    )
++    # 3 sentences -> 3 picks -> 3 segments (each file long enough)
++    assert len(segs) == 3
++    assert segs[0].path != segs[1].path != segs[2].path
++    assert abs(segs[0].duration_s - 2.0) < 1e-6
++    assert abs(segs[1].duration_s - 3.0) < 1e-6
++    assert abs(segs[2].duration_s - 1.5) < 1e-6
++
++
++def test_plan_loops_short_file_within_sentence():
++    p = Path("short.mp4")
++    segs = plan_reddit_sentence_clips(
++        [p],
++        [5.0],
++        video_speed=100,
++        durations={p: 2.0},
++        rng=random.Random(1),
++    )
++    assert len(segs) == 3  # 2+2+1
++    assert all(s.path == p and s.start_s == 0.0 for s in segs)
++    assert abs(sum(s.duration_s for s in segs) - 5.0) < 1e-6
++
++
++def test_plan_video_speed_doubles_source():
++    p = Path("a.mp4")
++    segs = plan_reddit_sentence_clips(
++        [p],
++        [2.0],
++        video_speed=200,
++        durations={p: 10.0},
++        rng=random.Random(2),
++    )
++    assert abs(sum(s.duration_s for s in segs) - 4.0) < 1e-6
++
++
++def test_plan_reshuffles_when_more_sentences_than_pool():
++    paths = [Path("a.mp4"), Path("b.mp4")]
++    durs_map = {p: 10.0 for p in paths}
++    rng = random.Random(3)
++    segs = plan_reddit_sentence_clips(
++        paths,
++        [1.0, 1.0, 1.0],
++        durations=durs_map,
++        rng=rng,
++    )
++    assert len(segs) == 3
++    assert len({s.path for s in segs}) >= 2  # used both before repeat
+diff --git a/tests/test_render.py b/tests/test_render.py
+index 22b2c87..ef58862 100644
+--- a/tests/test_render.py
++++ b/tests/test_render.py
+@@ -1,17 +1,18 @@
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from roblox_viral.reddit_clips import ClipSegment
+ from roblox_viral.render import (
+     RenderError,
++    _playback_setpts,
+     build_reddit_background,
+     render_still,
+     render_video,
+ )
+ 
+ 
+ def _touch(path: Path, data: bytes = b"x") -> Path:
+     path.parent.mkdir(parents=True, exist_ok=True)
+     path.write_bytes(data)
+     return path
+@@ -295,20 +296,62 @@ def test_render_still_missing_image_raises(tmp_path, monkeypatch):
+     monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+     with pytest.raises(RenderError, match="Image"):
+         render_still(
+             image_path=tmp_path / "missing.jpg",
+             audio_path=audio,
+             ass_path=ass,
+             output_path=tmp_path / "out.mp4",
+         )
+ 
+ 
++def test_playback_setpts_reddit_mode_accepts_500():
++    assert _playback_setpts(500, mode="reddit") == "setpts=100/500*PTS"
++
++
++def test_playback_setpts_single_mode_rejects_500():
++    with pytest.raises(ValueError, match="video_speed must be between"):
++        _playback_setpts(500, mode="single")
++
++
++def test_render_video_reddit_speed_500_inserts_setpts(tmp_path, monkeypatch):
++    video = _touch(tmp_path / "game.mp4")
++    audio = _touch(tmp_path / "n.mp3")
++    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
++    out = tmp_path / "out.mp4"
++    seen = {}
++
++    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
++    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
++
++    def fake_run(cmd, check=False, capture_output=True, text=True):
++        seen["cmd"] = cmd
++        out.write_bytes(b"mp4")
++
++        class R:
++            returncode = 0
++            stderr = ""
++
++        return R()
++
++    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
++    render_video(
++        video_path=video,
++        audio_path=audio,
++        ass_path=ass,
++        output_path=out,
++        video_speed=500,
++        mode="reddit",
++    )
++    vf = seen["cmd"][seen["cmd"].index("-vf") + 1]
++    assert "setpts=100/500*PTS" in vf
++
++
+ def test_render_video_default_speed_omits_setpts(tmp_path, monkeypatch):
+     video = _touch(tmp_path / "game.mp4")
+     audio = _touch(tmp_path / "n.mp3")
+     ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+     out = tmp_path / "out.mp4"
+     seen = {}
+ 
+     monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
+     monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+ 
+diff --git a/tests/test_voice.py b/tests/test_voice.py
+index 94f9557..76490f7 100644
+--- a/tests/test_voice.py
++++ b/tests/test_voice.py
+@@ -68,22 +68,39 @@ def test_edge_tts_provider_passes_rate_and_pitch(tmp_path, monkeypatch):
+         pitch="+15Hz",
+     ).synthesize("Hello", out)
+     assert seen["rate"] == "+30%"
+     assert seen["pitch"] == "+15Hz"
+     assert seen["boundary"] == "WordBoundary"
+     assert out.is_file()
+ 
+ 
+ def test_validate_video_speed_ok():
+     assert DEFAULT_VIDEO_SPEED == 100
+-    assert validate_video_speed(100) == 100
+-    assert validate_video_speed(50) == 50
+-    assert validate_video_speed(200) == 200
++    assert validate_video_speed(100, mode="single") == 100
++    assert validate_video_speed(50, mode="single") == 50
++    assert validate_video_speed(200, mode="single") == 200
+ 
+ 
+ def test_validate_video_speed_rejects():
+     with pytest.raises(ValueError):
+-        validate_video_speed(49)
++        validate_video_speed(49, mode="single")
+     with pytest.raises(ValueError):
+-        validate_video_speed(201)
++        validate_video_speed(201, mode="single")
+     with pytest.raises(ValueError):
+         validate_video_speed(True)  # type: ignore[arg-type]
++
++
++def test_validate_video_speed_reddit_allows_500():
++    assert validate_video_speed(500, mode="reddit") == 500
++
++
++def test_validate_video_speed_reddit_rejects_99():
++    with pytest.raises(ValueError):
++        validate_video_speed(99, mode="reddit")
++
++
++def test_validate_video_speed_single_still_50_200():
++    assert validate_video_speed(50, mode="single") == 50
++    with pytest.raises(ValueError):
++        validate_video_speed(49, mode="single")
++    with pytest.raises(ValueError):
++        validate_video_speed(500, mode="single")
+diff --git a/tests/web/test_api.py b/tests/web/test_api.py
+index 6203c9d..9979ba7 100644
+--- a/tests/web/test_api.py
++++ b/tests/web/test_api.py
+@@ -207,20 +207,35 @@ def test_media_output_serves_png(tmp_path, monkeypatch):
+     _login(c)
+     settings = c.app.state.settings
+     settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+     (settings.outputs_dir / "story-card.png").write_bytes(b"png-bytes")
+     r = c.get("/media/outputs/story-card.png")
+     assert r.status_code == 200
+     assert r.content == b"png-bytes"
+     assert "image/png" in r.headers.get("content-type", "")
+ 
+ 
++def test_generate_page_video_speed_bounds(tmp_path, monkeypatch):
++    async def fake_voices():
++        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
++
++    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
++    c = _client(tmp_path, monkeypatch)
++    _login(c)
++    r = c.get("/")
++    assert 'id="video_speed"' in r.text
++    assert 'min="50"' in r.text
++    assert 'max="200"' in r.text
++    assert 'data-single-min="50"' in r.text
++    assert 'data-reddit-max="500"' in r.text
++
++
+ def test_generate_page_has_hidden_title_card_download(tmp_path, monkeypatch):
+     async def fake_voices():
+         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+ 
+     monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+     c = _client(tmp_path, monkeypatch)
+     _login(c)
+     r = c.get("/")
+     assert r.status_code == 200
+     assert 'id="download-card"' in r.text
+diff --git a/tests/web/test_api_v1.py b/tests/web/test_api_v1.py
+index b9055de..ffa2c06 100644
+--- a/tests/web/test_api_v1.py
++++ b/tests/web/test_api_v1.py
+@@ -165,20 +165,41 @@ def test_create_resolves_source_video(tmp_path, monkeypatch):
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+             "type": "single",
+             "source_name": "raw.mp4",
+         },
+     )
+     assert r.status_code == 200
+ 
+ 
++def test_create_accepts_reddit_video_speed_500(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
++    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "reddit",
++            "video_speed": "500",
++        },
++    )
++    assert r.status_code == 200
++    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
++    assert st.json()["video_speed"] == 500
++
++
+ def test_create_invalid_video_speed_400(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+diff --git a/tests/web/test_jobs.py b/tests/web/test_jobs.py
+index f0b343e..eb472a2 100644
+--- a/tests/web/test_jobs.py
++++ b/tests/web/test_jobs.py
+@@ -497,132 +497,153 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
+         Path(output_path).write_bytes(b"mp3")
+         return [WordTiming("One", 0, 100)]
+ 
+     def fake_write_ass(words, ass_path, sentences=None):
+         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+ 
+     def fake_probe(path):
+         path = Path(path)
+         return 12.0 if path.name == "narration.mp3" else 8.0
+ 
+-    def fake_plan(paths, target_seconds, *, durations):
+-        seen["plan"] = (paths, target_seconds, durations)
++    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
++        seen["plan"] = (paths, sentence_durations_s, video_speed, durations)
+         return ["planned-segment"]
+ 
+     def fake_build(segments, output_path, *, work_dir=None):
+         seen["build"] = (segments, Path(output_path), Path(work_dir))
+         Path(output_path).write_bytes(b"background")
+ 
+     def fake_render_video(**kwargs):
+         seen["render"] = kwargs
+         Path(kwargs["output_path"]).write_bytes(b"mp4")
+ 
+     monkeypatch.setattr(
+         "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+     monkeypatch.setattr(
+         jobs_module, "probe_duration_seconds", fake_probe, raising=False
+     )
+-    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
++    monkeypatch.setattr(
++        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
++    )
+     monkeypatch.setattr(
+         jobs_module, "build_reddit_background", fake_build, raising=False
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+ 
+     job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
+     mgr.run_job(s, job.id)
+ 
+     reddit_bg = s.jobs_dir / job.id / "reddit_bg.mp4"
+-    paths, target_seconds, durations = seen["plan"]
++    paths, sent_durs, speed, durations = seen["plan"]
+     assert paths == videos
+-    assert target_seconds == 12.0
++    assert len(sent_durs) == 1
++    assert sent_durs[0] == 0.1
++    assert speed == job.video_speed
+     assert durations == {videos[0]: 8.0, videos[1]: 8.0}
+     assert seen["build"] == (["planned-segment"], reddit_bg, s.jobs_dir / job.id)
+     assert seen["render"]["video_path"] == reddit_bg
+     assert seen["render"]["overlay_path"] is None
+     assert str(seen["render"]["title_card_path"]).endswith("reddit_card.png")
+     assert seen["render"]["title_card_until_s"] > 0
+     assert seen["render"]["video_speed"] == job.video_speed
+     assert mgr.get(job.id, s).status == "done"
+ 
+ 
+-def test_run_reddit_scales_plan_target_by_video_speed(tmp_path, monkeypatch):
++def test_run_reddit_plans_by_sentence_durations(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     (s.videos_dir / "one.mp4").write_bytes(b"vid")
+     mgr = JobManager()
+     seen = {}
+ 
+     def fake_synthesize(self, text, output_path):
+         Path(output_path).write_bytes(b"mp3")
+-        return [WordTiming("One", 0, 100)]
++        return [
++            WordTiming("First", 0, 500),
++            WordTiming("sentence", 500, 1000),
++            WordTiming("here", 1000, 1500),
++            WordTiming("Second", 1500, 2000),
++            WordTiming("line", 2000, 2500),
++        ]
+ 
+     def fake_write_ass(words, ass_path, sentences=None):
+         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+ 
+     def fake_probe(path):
+         return 12.0 if Path(path).name == "narration.mp3" else 8.0
+ 
+-    def fake_plan(paths, target_seconds, *, durations):
+-        seen["target_seconds"] = target_seconds
++    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
++        seen["plan"] = (paths, sentence_durations_s, video_speed, durations)
+         return ["planned-segment"]
+ 
+     def fake_build(segments, output_path, *, work_dir=None):
+         Path(output_path).write_bytes(b"background")
+ 
+     def fake_render_video(**kwargs):
+         Path(kwargs["output_path"]).write_bytes(b"mp4")
+ 
+     monkeypatch.setattr(
+         "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+     monkeypatch.setattr(
+         jobs_module, "probe_duration_seconds", fake_probe, raising=False
+     )
+-    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
++    monkeypatch.setattr(
++        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
++    )
+     monkeypatch.setattr(
+         jobs_module, "build_reddit_background", fake_build, raising=False
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+ 
++    story = "First sentence here.\nSecond line.\n"
+     job = mgr.create(
+         s,
+         "",
+-        "One line only here.\n",
++        story,
+         "en-US-EmmaNeural",
+         mode="reddit",
+         video_speed=200,
+     )
+     mgr.run_job(s, job.id)
+ 
+-    assert seen["target_seconds"] == 24.0
++    _, sent_durs, speed, _ = seen["plan"]
++    assert len(sent_durs) == 2
++    assert speed == 200
+     assert mgr.get(job.id, s).status == "done"
+ 
+ 
+ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
+     s = _settings(tmp_path, monkeypatch)
+     (s.videos_dir / "one.mp4").write_bytes(b"vid")
+     mgr = JobManager()
+     seen = {}
+ 
+     def fake_synthesize(self, text, output_path):
+         Path(output_path).write_bytes(b"mp3")
+-        return [WordTiming("One", 0, 500)]
++        return [
++            WordTiming("First", 0, 500),
++            WordTiming("sentence", 500, 1000),
++            WordTiming("here", 1000, 1500),
++            WordTiming("Second", 1500, 2000),
++            WordTiming("line", 2000, 2500),
++        ]
+ 
+     def fake_write_ass(words, ass_path, sentences=None):
+         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+ 
+     def fake_probe(path):
+         return 12.0 if Path(path).name == "narration.mp3" else 8.0
+ 
+-    def fake_plan(paths, target_seconds, *, durations):
++    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
+         return ["planned-segment"]
+ 
+     def fake_build(segments, output_path, *, work_dir=None):
+         Path(output_path).write_bytes(b"background")
+ 
+     def fake_render_reddit_card(title, output_path, *, scale=2.0):
+         seen.setdefault("cards", []).append(
+             (title, Path(output_path), scale)
+         )
+         Path(output_path).write_bytes(b"png")
+@@ -633,21 +654,23 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
+ 
+     def fake_render_video(**kwargs):
+         seen["render"] = kwargs
+         Path(kwargs["output_path"]).write_bytes(b"mp4")
+ 
+     monkeypatch.setattr(
+         "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+     monkeypatch.setattr(jobs_module, "probe_duration_seconds", fake_probe, raising=False)
+-    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
++    monkeypatch.setattr(
++        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
++    )
+     monkeypatch.setattr(
+         jobs_module, "build_reddit_background", fake_build, raising=False
+     )
+     monkeypatch.setattr(
+         jobs_module, "render_reddit_card", fake_render_reddit_card, raising=False
+     )
+     monkeypatch.setattr(
+         jobs_module, "first_sentence_end_s", fake_first_sentence_end_s, raising=False
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+@@ -674,40 +697,42 @@ def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
+     def fake_synthesize(self, text, output_path):
+         Path(output_path).write_bytes(b"mp3")
+         return [WordTiming("One", 0, 500)]
+ 
+     def fake_write_ass(words, ass_path, sentences=None):
+         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+ 
+     def fake_probe(path):
+         return 12.0 if Path(path).name == "narration.mp3" else 8.0
+ 
+-    def fake_plan(paths, target_seconds, *, durations):
++    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
+         return ["planned-segment"]
+ 
+     def fake_build(segments, output_path, *, work_dir=None):
+         Path(output_path).write_bytes(b"background")
+ 
+     def fake_render_reddit_card(title, output_path, *, scale=2.0):
+         Path(output_path).write_bytes(b"png-card")
+ 
+     def fake_render_video(**kwargs):
+         Path(kwargs["output_path"]).write_bytes(b"mp4")
+ 
+     monkeypatch.setattr(
+         "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+     monkeypatch.setattr(
+         jobs_module, "probe_duration_seconds", fake_probe, raising=False
+     )
+-    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
++    monkeypatch.setattr(
++        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
++    )
+     monkeypatch.setattr(
+         jobs_module, "build_reddit_background", fake_build, raising=False
+     )
+     monkeypatch.setattr(
+         jobs_module, "render_reddit_card", fake_render_reddit_card, raising=False
+     )
+     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+ 
+     job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
+     mgr.run_job(s, job.id)

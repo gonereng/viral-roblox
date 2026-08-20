@@ -214,6 +214,23 @@ def test_media_output_serves_png(tmp_path, monkeypatch):
     assert "image/png" in r.headers.get("content-type", "")
 
 
+def test_generate_page_video_speed_bounds(tmp_path, monkeypatch):
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    r = c.get("/")
+    assert 'id="video_speed"' in r.text
+    assert 'min="50"' in r.text
+    assert 'max="200"' in r.text
+    assert 'data-single-min="50"' in r.text
+    assert 'data-reddit-max="500"' in r.text
+    assert 'id="video-speed-bounds"' in r.text
+    assert 'src="/static/app.js?v=reddit-500"' in r.text
+
+
 def test_generate_page_has_hidden_title_card_download(tmp_path, monkeypatch):
     async def fake_voices():
         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]

@@ -102,7 +102,7 @@ async def create_video(
         )
         format_edge_pitch(pitch_i)
         format_edge_rate(speed_i)
-        validate_video_speed(video_speed_i)
+        validate_video_speed(video_speed_i, mode=mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

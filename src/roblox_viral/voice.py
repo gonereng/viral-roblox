@@ -29,16 +29,21 @@ PITCH_MIN, PITCH_MAX = -100, 100
 SPEED_MIN, SPEED_MAX = 50, 200
 
 DEFAULT_VIDEO_SPEED = 100
-VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = 50, 200
+SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX = 50, 200
+REDDIT_VIDEO_SPEED_MIN, REDDIT_VIDEO_SPEED_MAX = 100, 500
+VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX
 
 
-def validate_video_speed(percent: int) -> int:
+def validate_video_speed(percent: int, *, mode: str = "single") -> int:
     if not isinstance(percent, int) or isinstance(percent, bool):
         raise ValueError("video_speed must be an int")
-    if percent < VIDEO_SPEED_MIN or percent > VIDEO_SPEED_MAX:
-        raise ValueError(
-            f"video_speed must be between {VIDEO_SPEED_MIN} and {VIDEO_SPEED_MAX}"
-        )
+    m = (mode or "single").strip().lower()
+    if m == "reddit":
+        lo, hi = REDDIT_VIDEO_SPEED_MIN, REDDIT_VIDEO_SPEED_MAX
+    else:
+        lo, hi = SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX
+    if percent < lo or percent > hi:
+        raise ValueError(f"video_speed must be between {lo} and {hi}")
     return percent
 
 

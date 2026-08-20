@@ -512,8 +512,8 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
         path = Path(path)
         return 12.0 if path.name == "narration.mp3" else 8.0
 
-    def fake_plan(paths, target_seconds, *, durations):
-        seen["plan"] = (paths, target_seconds, durations)
+    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
+        seen["plan"] = (paths, sentence_durations_s, video_speed, durations)
         return ["planned-segment"]
 
     def fake_build(segments, output_path, *, work_dir=None):
@@ -531,7 +531,9 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
     monkeypatch.setattr(
         jobs_module, "probe_duration_seconds", fake_probe, raising=False
     )
-    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
+    monkeypatch.setattr(
+        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
+    )
     monkeypatch.setattr(
         jobs_module, "build_reddit_background", fake_build, raising=False
     )
@@ -541,9 +543,11 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
     mgr.run_job(s, job.id)
 
     reddit_bg = s.jobs_dir / job.id / "reddit_bg.mp4"
-    paths, target_seconds, durations = seen["plan"]
+    paths, sent_durs, speed, durations = seen["plan"]
     assert paths == videos
-    assert target_seconds == 12.0
+    assert len(sent_durs) == 1
+    assert sent_durs[0] == 0.1
+    assert speed == job.video_speed
     assert durations == {videos[0]: 8.0, videos[1]: 8.0}
     assert seen["build"] == (["planned-segment"], reddit_bg, s.jobs_dir / job.id)
     assert seen["render"]["video_path"] == reddit_bg
@@ -554,7 +558,7 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
     assert mgr.get(job.id, s).status == "done"
 
 
-def test_run_reddit_scales_plan_target_by_video_speed(tmp_path, monkeypatch):
+def test_run_reddit_plans_by_sentence_durations(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     (s.videos_dir / "one.mp4").write_bytes(b"vid")
     mgr = JobManager()
@@ -562,7 +566,13 @@ def test_run_reddit_scales_plan_target_by_video_speed(tmp_path, monkeypatch):
 
     def fake_synthesize(self, text, output_path):
         Path(output_path).write_bytes(b"mp3")
-        return [WordTiming("One", 0, 100)]
+        return [
+            WordTiming("First", 0, 500),
+            WordTiming("sentence", 500, 1000),
+            WordTiming("here", 1000, 1500),
+            WordTiming("Second", 1500, 2000),
+            WordTiming("line", 2000, 2500),
+        ]
 
     def fake_write_ass(words, ass_path, sentences=None):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -570,8 +580,8 @@ def test_run_reddit_scales_plan_target_by_video_speed(tmp_path, monkeypatch):
     def fake_probe(path):
         return 12.0 if Path(path).name == "narration.mp3" else 8.0
 
-    def fake_plan(paths, target_seconds, *, durations):
-        seen["target_seconds"] = target_seconds
+    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
+        seen["plan"] = (paths, sentence_durations_s, video_speed, durations)
         return ["planned-segment"]
 
     def fake_build(segments, output_path, *, work_dir=None):
@@ -587,23 +597,28 @@ def test_run_reddit_scales_plan_target_by_video_speed(tmp_path, monkeypatch):
     monkeypatch.setattr(
         jobs_module, "probe_duration_seconds", fake_probe, raising=False
     )
-    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
+    monkeypatch.setattr(
+        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
+    )
     monkeypatch.setattr(
         jobs_module, "build_reddit_background", fake_build, raising=False
     )
     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
 
+    story = "First sentence - here.\nSecond line.\n"
     job = mgr.create(
         s,
         "",
-        "One line only - here.\n",
+        story,
         "en-US-EmmaNeural",
         mode="reddit",
         video_speed=200,
     )
     mgr.run_job(s, job.id)
 
-    assert seen["target_seconds"] == 24.0
+    _, sent_durs, speed, _ = seen["plan"]
+    assert len(sent_durs) == 2
+    assert speed == 200
     assert mgr.get(job.id, s).status == "done"
 
 
@@ -615,7 +630,13 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
 
     def fake_synthesize(self, text, output_path):
         Path(output_path).write_bytes(b"mp3")
-        return [WordTiming("One", 0, 500)]
+        return [
+            WordTiming("First", 0, 500),
+            WordTiming("sentence", 500, 1000),
+            WordTiming("here", 1000, 1500),
+            WordTiming("Second", 1500, 2000),
+            WordTiming("line", 2000, 2500),
+        ]
 
     def fake_write_ass(words, ass_path, sentences=None):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -623,7 +644,7 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
     def fake_probe(path):
         return 12.0 if Path(path).name == "narration.mp3" else 8.0
 
-    def fake_plan(paths, target_seconds, *, durations):
+    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
         return ["planned-segment"]
 
     def fake_build(segments, output_path, *, work_dir=None):
@@ -652,7 +673,9 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
     monkeypatch.setattr(jobs_module, "probe_duration_seconds", fake_probe, raising=False)
-    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
+    monkeypatch.setattr(
+        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
+    )
     monkeypatch.setattr(
         jobs_module, "build_reddit_background", fake_build, raising=False
     )
@@ -699,7 +722,7 @@ def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
     def fake_probe(path):
         return 12.0 if Path(path).name == "narration.mp3" else 8.0
 
-    def fake_plan(paths, target_seconds, *, durations):
+    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
         return ["planned-segment"]
 
     def fake_build(segments, output_path, *, work_dir=None):
@@ -721,7 +744,9 @@ def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(
         jobs_module, "probe_duration_seconds", fake_probe, raising=False
     )
-    monkeypatch.setattr(jobs_module, "plan_reddit_clips", fake_plan, raising=False)
+    monkeypatch.setattr(
+        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
+    )
     monkeypatch.setattr(
         jobs_module, "build_reddit_background", fake_build, raising=False
     )

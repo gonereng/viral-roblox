@@ -13,7 +13,10 @@ from pathlib import Path
 from roblox_viral.captions import write_ass
 from roblox_viral.hook_cover import render_hook_cover, split_hook
 from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
-from roblox_viral.reddit_clips import plan_reddit_clips
+from roblox_viral.reddit_clips import (
+    plan_reddit_sentence_clips,
+    sentence_durations_s,
+)
 from roblox_viral.render import (
     build_reddit_background,
     probe_duration_seconds,
@@ -110,8 +113,8 @@ class JobManager:
     ) -> JobRecord:
         format_edge_pitch(pitch)
         format_edge_rate(speed)
-        validate_video_speed(video_speed)
         mode = normalize_mode(mode)
+        validate_video_speed(video_speed, mode=mode)
         if mode == "reddit":
             if not list_videos(settings):
                 raise ValueError("Reddit mode requires at least one video")
@@ -286,12 +289,11 @@ class JobManager:
                     video_path: probe_duration_seconds(video_path)
                     for video_path in videos
                 }
-                narration_duration = probe_duration_seconds(narration_path)
-                # setpts shortens wall-clock playback; plan enough source to cover audio
-                plan_target = narration_duration * (record.video_speed / 100.0)
-                segments = plan_reddit_clips(
+                sent_durations = sentence_durations_s(sentences, words)
+                segments = plan_reddit_sentence_clips(
                     videos,
-                    plan_target,
+                    sent_durations,
+                    video_speed=record.video_speed,
                     durations=durations,
                 )
                 media_path = job_dir / "reddit_bg.mp4"
@@ -326,6 +328,7 @@ class JobManager:
                     title_card_path=title_card_path,
                     title_card_until_s=title_card_until_s,
                     video_speed=record.video_speed,
+                    mode=record.mode,
                 )
 
             record.output_name = output_name

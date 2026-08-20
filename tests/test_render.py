@@ -5,6 +5,7 @@ import pytest
 from roblox_viral.reddit_clips import ClipSegment
 from roblox_viral.render import (
     RenderError,
+    _playback_setpts,
     build_reddit_background,
     render_still,
     render_video,
@@ -300,6 +301,48 @@ def test_render_still_missing_image_raises(tmp_path, monkeypatch):
             ass_path=ass,
             output_path=tmp_path / "out.mp4",
         )
+
+
+def test_playback_setpts_reddit_mode_accepts_500():
+    assert _playback_setpts(500, mode="reddit") == "setpts=100/500*PTS"
+
+
+def test_playback_setpts_single_mode_rejects_500():
+    with pytest.raises(ValueError, match="video_speed must be between"):
+        _playback_setpts(500, mode="single")
+
+
+def test_render_video_reddit_speed_500_inserts_setpts(tmp_path, monkeypatch):
+    video = _touch(tmp_path / "game.mp4")
+    audio = _touch(tmp_path / "n.mp3")
+    ass = _touch(tmp_path / "c.ass", b"[Script Info]\n")
+    out = tmp_path / "out.mp4"
+    seen = {}
+
+    monkeypatch.setattr("roblox_viral.render.probe_duration_seconds", lambda _p: 2.0)
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        seen["cmd"] = cmd
+        out.write_bytes(b"mp4")
+
+        class R:
+            returncode = 0
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+    render_video(
+        video_path=video,
+        audio_path=audio,
+        ass_path=ass,
+        output_path=out,
+        video_speed=500,
+        mode="reddit",
+    )
+    vf = seen["cmd"][seen["cmd"].index("-vf") + 1]
+    assert "setpts=100/500*PTS" in vf
 
 
 def test_render_video_default_speed_omits_setpts(tmp_path, monkeypatch):
