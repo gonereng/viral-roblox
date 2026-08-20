@@ -322,6 +322,7 @@ class JobManager:
                     title_card_path=title_card_path,
                     title_card_until_s=title_card_until_s,
                     video_speed=record.video_speed,
+                    mode=record.mode,
                 )
 
             record.output_name = output_name

@@ -153,8 +153,8 @@ def _ass_filter_path(ass_path: Path) -> str:
     return p
 
 
-def _playback_setpts(video_speed: int) -> str | None:
-    validate_video_speed(video_speed)
+def _playback_setpts(video_speed: int, *, mode: str = "single") -> str | None:
+    validate_video_speed(video_speed, mode=mode)
     if video_speed == 100:
         return None
     return f"setpts=100/{video_speed}*PTS"
@@ -170,6 +170,7 @@ def render_video(
     work_dir: Path | str | None = None,
     overlay_path: Path | str | None = None,
     video_speed: int = 100,
+    mode: str = "single",
     title_card_path: Path | str | None = None,
     title_card_until_s: float | None = None,
 ) -> Path:
@@ -217,7 +218,7 @@ def render_video(
 
     audio_duration = probe_duration_seconds(audio)
     ass_escaped = _ass_filter_path(ass)
-    setpts = _playback_setpts(video_speed)
+    setpts = _playback_setpts(video_speed, mode=mode)
 
     if overlay is None and title_card is None:
         parts = [
