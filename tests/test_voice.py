@@ -75,15 +75,32 @@ def test_edge_tts_provider_passes_rate_and_pitch(tmp_path, monkeypatch):
 
 def test_validate_video_speed_ok():
     assert DEFAULT_VIDEO_SPEED == 100
-    assert validate_video_speed(100) == 100
-    assert validate_video_speed(50) == 50
-    assert validate_video_speed(200) == 200
+    assert validate_video_speed(100, mode="single") == 100
+    assert validate_video_speed(50, mode="single") == 50
+    assert validate_video_speed(200, mode="single") == 200
 
 
 def test_validate_video_speed_rejects():
     with pytest.raises(ValueError):
-        validate_video_speed(49)
+        validate_video_speed(49, mode="single")
     with pytest.raises(ValueError):
-        validate_video_speed(201)
+        validate_video_speed(201, mode="single")
     with pytest.raises(ValueError):
         validate_video_speed(True)  # type: ignore[arg-type]
+
+
+def test_validate_video_speed_reddit_allows_500():
+    assert validate_video_speed(500, mode="reddit") == 500
+
+
+def test_validate_video_speed_reddit_rejects_99():
+    with pytest.raises(ValueError):
+        validate_video_speed(99, mode="reddit")
+
+
+def test_validate_video_speed_single_still_50_200():
+    assert validate_video_speed(50, mode="single") == 50
+    with pytest.raises(ValueError):
+        validate_video_speed(49, mode="single")
+    with pytest.raises(ValueError):
+        validate_video_speed(500, mode="single")

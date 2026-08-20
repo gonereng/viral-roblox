@@ -424,8 +424,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             format_edge_pitch(pitch)
             format_edge_rate(speed)
-            validate_video_speed(video_speed)
             mode = normalize_mode(body.mode)
+            validate_video_speed(video_speed, mode=mode)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:

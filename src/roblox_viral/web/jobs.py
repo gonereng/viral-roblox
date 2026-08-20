@@ -109,8 +109,8 @@ class JobManager:
     ) -> JobRecord:
         format_edge_pitch(pitch)
         format_edge_rate(speed)
-        validate_video_speed(video_speed)
         mode = normalize_mode(mode)
+        validate_video_speed(video_speed, mode=mode)
         if mode == "reddit":
             if not list_videos(settings):
                 raise ValueError("Reddit mode requires at least one video")
