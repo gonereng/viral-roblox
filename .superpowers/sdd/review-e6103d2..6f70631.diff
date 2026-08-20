@@ -1,0 +1,216 @@
+# Review package: e6103d2e78a205d9c0ff4f3ce80823b500558737..6f70631836ce60ea2de48e974f6f141d8a969372
+
+## Commits
+6f70631 feat: plan Reddit background clips per sentence
+
+## Files changed
+ src/roblox_viral/reddit_clips.py | 57 ++++++++++++++++++++++++++++
+ tests/test_reddit_clips.py       | 80 +++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 136 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/src/roblox_viral/reddit_clips.py b/src/roblox_viral/reddit_clips.py
+index 2769628..2228331 100644
+--- a/src/roblox_viral/reddit_clips.py
++++ b/src/roblox_viral/reddit_clips.py
+@@ -1,19 +1,21 @@
+ """Plan reddit background clips by shuffling source videos."""
+ 
+ from __future__ import annotations
+ 
+ import random
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
++from roblox_viral.captions import partition_words_by_sentences
+ from roblox_viral.render import probe_duration_seconds
++from roblox_viral.voice import WordTiming
+ 
+ _EPSILON = 1e-6
+ 
+ 
+ @dataclass(frozen=True)
+ class ClipSegment:
+     path: Path
+     start_s: float  # always 0 for v1
+     duration_s: float
+ 
+@@ -53,10 +55,65 @@ def plan_reddit_clips(
+         path = bag.pop()
+         duration = _duration_for(path, durations)
+         if duration <= 0:
+             raise ValueError(f"duration must be positive for {path}")
+ 
+         use = min(duration, remaining)
+         out.append(ClipSegment(path=path, start_s=0.0, duration_s=use))
+         remaining -= use
+ 
+     return out
++
++
++def sentence_durations_s(
++    sentences: list[str], words: list[WordTiming]
++) -> list[float]:
++    groups = partition_words_by_sentences(sentences, words)
++    if len(groups) != len(sentences):
++        raise ValueError("sentence count mismatch")
++    out: list[float] = []
++    for group in groups:
++        if not group:
++            raise ValueError("sentence has no words")
++        duration = (group[-1].end_ms - group[0].start_ms) / 1000.0
++        if duration <= 0:
++            raise ValueError("sentence duration must be positive")
++        out.append(duration)
++    return out
++
++
++def plan_reddit_sentence_clips(
++    paths: list[Path],
++    sentence_durations_s: list[float],
++    *,
++    video_speed: int = 100,
++    durations: dict[Path, float] | None = None,
++    rng: random.Random | None = None,
++) -> list[ClipSegment]:
++    if not paths or not sentence_durations_s:
++        raise ValueError("paths and sentence_durations_s must be non-empty")
++    if video_speed <= 0:
++        raise ValueError("video_speed must be positive")
++
++    rng = rng or random.Random()
++    out: list[ClipSegment] = []
++    bag: list[Path] = []
++
++    for sent_dur in sentence_durations_s:
++        if sent_dur <= 0:
++            raise ValueError("sentence duration must be positive")
++        source_needed = sent_dur * (video_speed / 100.0)
++        if not bag:
++            bag = list(paths)
++            rng.shuffle(bag)
++        path = bag.pop()
++        file_duration = _duration_for(path, durations)
++        if file_duration <= 0:
++            raise ValueError(f"duration must be positive for {path}")
++
++        remaining = source_needed
++        while remaining > _EPSILON:
++            use = min(file_duration, remaining)
++            out.append(ClipSegment(path=path, start_s=0.0, duration_s=use))
++            remaining -= use
++
++    return out
+diff --git a/tests/test_reddit_clips.py b/tests/test_reddit_clips.py
+index df1ad76..fe1d4ec 100644
+--- a/tests/test_reddit_clips.py
++++ b/tests/test_reddit_clips.py
+@@ -1,18 +1,23 @@
+ """Tests for reddit clip planning."""
+ 
+ import random
+ from pathlib import Path
+ 
+ import pytest
+ 
+-from roblox_viral.reddit_clips import plan_reddit_clips
++from roblox_viral.reddit_clips import (
++    plan_reddit_clips,
++    plan_reddit_sentence_clips,
++    sentence_durations_s,
++)
++from roblox_viral.voice import WordTiming
+ 
+ 
+ def test_plan_trims_last_clip():
+     paths = [Path("a.mp4"), Path("b.mp4")]
+     durs = {paths[0]: 10.0, paths[1]: 10.0}
+     rng = random.Random(0)
+     segs = plan_reddit_clips(paths, 15.0, durations=durs, rng=rng)
+     assert abs(sum(s.duration_s for s in segs) - 15.0) < 1e-6
+     assert segs[-1].duration_s < 10.0 or len(segs) == 2
+ 
+@@ -20,10 +25,83 @@ def test_plan_trims_last_clip():
+ def test_plan_reshuffles_when_exhausted():
+     p = Path("only.mp4")
+     segs = plan_reddit_clips([p], 25.0, durations={p: 10.0}, rng=random.Random(1))
+     assert len(segs) == 3
+     assert abs(sum(s.duration_s for s in segs) - 25.0) < 1e-6
+ 
+ 
+ def test_plan_empty_pool_errors():
+     with pytest.raises(ValueError):
+         plan_reddit_clips([], 10.0, durations={})
++
++
++def test_sentence_durations_s_from_word_groups():
++    sentences = ["Hello world.", "Second line."]
++    words = [
++        WordTiming("Hello", 0, 200),
++        WordTiming("world.", 200, 500),
++        WordTiming("Second", 500, 800),
++        WordTiming("line.", 800, 1000),
++    ]
++    durs = sentence_durations_s(sentences, words)
++    assert len(durs) == 2
++    assert abs(durs[0] - 0.5) < 1e-6
++    assert abs(durs[1] - 0.5) < 1e-6
++
++
++def test_plan_one_video_per_sentence():
++    paths = [Path("a.mp4"), Path("b.mp4"), Path("c.mp4")]
++    durs_map = {p: 30.0 for p in paths}
++    rng = random.Random(0)
++    segs = plan_reddit_sentence_clips(
++        paths,
++        [2.0, 3.0, 1.5],
++        video_speed=100,
++        durations=durs_map,
++        rng=rng,
++    )
++    # 3 sentences -> 3 picks -> 3 segments (each file long enough)
++    assert len(segs) == 3
++    assert segs[0].path != segs[1].path != segs[2].path
++    assert abs(segs[0].duration_s - 2.0) < 1e-6
++    assert abs(segs[1].duration_s - 3.0) < 1e-6
++    assert abs(segs[2].duration_s - 1.5) < 1e-6
++
++
++def test_plan_loops_short_file_within_sentence():
++    p = Path("short.mp4")
++    segs = plan_reddit_sentence_clips(
++        [p],
++        [5.0],
++        video_speed=100,
++        durations={p: 2.0},
++        rng=random.Random(1),
++    )
++    assert len(segs) == 3  # 2+2+1
++    assert all(s.path == p and s.start_s == 0.0 for s in segs)
++    assert abs(sum(s.duration_s for s in segs) - 5.0) < 1e-6
++
++
++def test_plan_video_speed_doubles_source():
++    p = Path("a.mp4")
++    segs = plan_reddit_sentence_clips(
++        [p],
++        [2.0],
++        video_speed=200,
++        durations={p: 10.0},
++        rng=random.Random(2),
++    )
++    assert abs(sum(s.duration_s for s in segs) - 4.0) < 1e-6
++
++
++def test_plan_reshuffles_when_more_sentences_than_pool():
++    paths = [Path("a.mp4"), Path("b.mp4")]
++    durs_map = {p: 10.0 for p in paths}
++    rng = random.Random(3)
++    segs = plan_reddit_sentence_clips(
++        paths,
++        [1.0, 1.0, 1.0],
++        durations=durs_map,
++        rng=rng,
++    )
++    assert len(segs) == 3
++    assert len({s.path for s in segs}) >= 2  # used both before repeat

@@ -1,0 +1,239 @@
+# Review package: 6f70631836ce60ea2de48e974f6f141d8a969372..0d2895c47c51c8ae29acf265ab95651298a04e89
+
+## Commits
+0d2895c feat: mode-specific video_speed validation (Reddit 100-500)
+
+## Files changed
+ src/roblox_viral/voice.py      | 17 +++++++++++------
+ src/roblox_viral/web/api_v1.py |  2 +-
+ src/roblox_viral/web/app.py    |  2 +-
+ src/roblox_viral/web/jobs.py   |  2 +-
+ tests/test_voice.py            | 27 ++++++++++++++++++++++-----
+ tests/web/test_api_v1.py       | 21 +++++++++++++++++++++
+ 6 files changed, 57 insertions(+), 14 deletions(-)
+
+## Diff
+diff --git a/src/roblox_viral/voice.py b/src/roblox_viral/voice.py
+index d8975ad..331f9e9 100644
+--- a/src/roblox_viral/voice.py
++++ b/src/roblox_viral/voice.py
+@@ -22,30 +22,35 @@ class VoiceProvider(Protocol):
+         """Synthesize speech to output_path; return word timings."""
+         ...
+ 
+ 
+ DEFAULT_PITCH = 15
+ DEFAULT_SPEED = 130
+ PITCH_MIN, PITCH_MAX = -100, 100
+ SPEED_MIN, SPEED_MAX = 50, 200
+ 
+ DEFAULT_VIDEO_SPEED = 100
+-VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = 50, 200
++SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX = 50, 200
++REDDIT_VIDEO_SPEED_MIN, REDDIT_VIDEO_SPEED_MAX = 100, 500
++VIDEO_SPEED_MIN, VIDEO_SPEED_MAX = SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX
+ 
+ 
+-def validate_video_speed(percent: int) -> int:
++def validate_video_speed(percent: int, *, mode: str = "single") -> int:
+     if not isinstance(percent, int) or isinstance(percent, bool):
+         raise ValueError("video_speed must be an int")
+-    if percent < VIDEO_SPEED_MIN or percent > VIDEO_SPEED_MAX:
+-        raise ValueError(
+-            f"video_speed must be between {VIDEO_SPEED_MIN} and {VIDEO_SPEED_MAX}"
+-        )
++    m = (mode or "single").strip().lower()
++    if m == "reddit":
++        lo, hi = REDDIT_VIDEO_SPEED_MIN, REDDIT_VIDEO_SPEED_MAX
++    else:
++        lo, hi = SINGLE_VIDEO_SPEED_MIN, SINGLE_VIDEO_SPEED_MAX
++    if percent < lo or percent > hi:
++        raise ValueError(f"video_speed must be between {lo} and {hi}")
+     return percent
+ 
+ 
+ def format_edge_pitch(pitch: int) -> str:
+     if not isinstance(pitch, int) or isinstance(pitch, bool):
+         raise ValueError("pitch must be an int")
+     if pitch < PITCH_MIN or pitch > PITCH_MAX:
+         raise ValueError(f"pitch must be between {PITCH_MIN} and {PITCH_MAX}")
+     if pitch >= 0:
+         return f"+{pitch}Hz"
+diff --git a/src/roblox_viral/web/api_v1.py b/src/roblox_viral/web/api_v1.py
+index 9260d85..61687bd 100644
+--- a/src/roblox_viral/web/api_v1.py
++++ b/src/roblox_viral/web/api_v1.py
+@@ -95,21 +95,21 @@ async def create_video(
+ 
+     voice_s = (voice or "").strip() or DEFAULT_VOICE
+     try:
+         pitch_i = _optional_int(pitch, DEFAULT_PITCH, "pitch")
+         speed_i = _optional_int(speed, DEFAULT_SPEED, "speed")
+         video_speed_i = _optional_int(
+             video_speed, DEFAULT_VIDEO_SPEED, "video_speed"
+         )
+         format_edge_pitch(pitch_i)
+         format_edge_rate(speed_i)
+-        validate_video_speed(video_speed_i)
++        validate_video_speed(video_speed_i, mode=mode)
+     except ValueError as exc:
+         raise HTTPException(status_code=400, detail=str(exc)) from exc
+ 
+     ephemeral = False
+     input_bytes: bytes | None = None
+     stored_name = "" if mode == "reddit" else name
+ 
+     if has_media:
+         assert media is not None
+         raw_name = Path(media.filename or "upload.bin").name
+diff --git a/src/roblox_viral/web/app.py b/src/roblox_viral/web/app.py
+index 5ece17f..2c01a94 100644
+--- a/src/roblox_viral/web/app.py
++++ b/src/roblox_viral/web/app.py
+@@ -417,22 +417,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+         story = body.story
+         voice = body.voice or DEFAULT_VOICE
+         pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
+         speed = DEFAULT_SPEED if body.speed is None else body.speed
+         video_speed = (
+             DEFAULT_VIDEO_SPEED if body.video_speed is None else body.video_speed
+         )
+         try:
+             format_edge_pitch(pitch)
+             format_edge_rate(speed)
+-            validate_video_speed(video_speed)
+             mode = normalize_mode(body.mode)
++            validate_video_speed(video_speed, mode=mode)
+         except ValueError as exc:
+             raise HTTPException(status_code=400, detail=str(exc)) from exc
+         try:
+             record = mgr.create(
+                 settings,
+                 source_name,
+                 story,
+                 voice,
+                 pitch=pitch,
+                 speed=speed,
+diff --git a/src/roblox_viral/web/jobs.py b/src/roblox_viral/web/jobs.py
+index cbd37ac..50a26c1 100644
+--- a/src/roblox_viral/web/jobs.py
++++ b/src/roblox_viral/web/jobs.py
+@@ -102,22 +102,22 @@ class JobManager:
+         voice: str,
+         pitch: int = DEFAULT_PITCH,
+         speed: int = DEFAULT_SPEED,
+         video_speed: int = DEFAULT_VIDEO_SPEED,
+         mode: str = "single",
+         ken_burns: bool = False,
+         ephemeral: bool = False,
+     ) -> JobRecord:
+         format_edge_pitch(pitch)
+         format_edge_rate(speed)
+-        validate_video_speed(video_speed)
+         mode = normalize_mode(mode)
++        validate_video_speed(video_speed, mode=mode)
+         if mode == "reddit":
+             if not list_videos(settings):
+                 raise ValueError("Reddit mode requires at least one video")
+             source_name = source_name or "reddit"
+             ken_burns = False
+             ephemeral = False
+         elif ephemeral:
+             safe = Path(source_name).name
+             if safe != source_name or not safe:
+                 raise ValueError("Invalid source_name")
+diff --git a/tests/test_voice.py b/tests/test_voice.py
+index 94f9557..76490f7 100644
+--- a/tests/test_voice.py
++++ b/tests/test_voice.py
+@@ -68,22 +68,39 @@ def test_edge_tts_provider_passes_rate_and_pitch(tmp_path, monkeypatch):
+         pitch="+15Hz",
+     ).synthesize("Hello", out)
+     assert seen["rate"] == "+30%"
+     assert seen["pitch"] == "+15Hz"
+     assert seen["boundary"] == "WordBoundary"
+     assert out.is_file()
+ 
+ 
+ def test_validate_video_speed_ok():
+     assert DEFAULT_VIDEO_SPEED == 100
+-    assert validate_video_speed(100) == 100
+-    assert validate_video_speed(50) == 50
+-    assert validate_video_speed(200) == 200
++    assert validate_video_speed(100, mode="single") == 100
++    assert validate_video_speed(50, mode="single") == 50
++    assert validate_video_speed(200, mode="single") == 200
+ 
+ 
+ def test_validate_video_speed_rejects():
+     with pytest.raises(ValueError):
+-        validate_video_speed(49)
++        validate_video_speed(49, mode="single")
+     with pytest.raises(ValueError):
+-        validate_video_speed(201)
++        validate_video_speed(201, mode="single")
+     with pytest.raises(ValueError):
+         validate_video_speed(True)  # type: ignore[arg-type]
++
++
++def test_validate_video_speed_reddit_allows_500():
++    assert validate_video_speed(500, mode="reddit") == 500
++
++
++def test_validate_video_speed_reddit_rejects_99():
++    with pytest.raises(ValueError):
++        validate_video_speed(99, mode="reddit")
++
++
++def test_validate_video_speed_single_still_50_200():
++    assert validate_video_speed(50, mode="single") == 50
++    with pytest.raises(ValueError):
++        validate_video_speed(49, mode="single")
++    with pytest.raises(ValueError):
++        validate_video_speed(500, mode="single")
+diff --git a/tests/web/test_api_v1.py b/tests/web/test_api_v1.py
+index b9055de..ffa2c06 100644
+--- a/tests/web/test_api_v1.py
++++ b/tests/web/test_api_v1.py
+@@ -165,20 +165,41 @@ def test_create_resolves_source_video(tmp_path, monkeypatch):
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
+             "type": "single",
+             "source_name": "raw.mp4",
+         },
+     )
+     assert r.status_code == 200
+ 
+ 
++def test_create_accepts_reddit_video_speed_500(tmp_path, monkeypatch):
++    c = _client(tmp_path, monkeypatch)
++    settings = c.app.state.settings
++    settings.videos_dir.mkdir(parents=True, exist_ok=True)
++    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
++    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
++    r = c.post(
++        "/api/v1/videos",
++        headers=_headers(),
++        data={
++            "voice": "en-US-EmmaNeural",
++            "story": "Hi.\n",
++            "type": "reddit",
++            "video_speed": "500",
++        },
++    )
++    assert r.status_code == 200
++    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
++    assert st.json()["video_speed"] == 500
++
++
+ def test_create_invalid_video_speed_400(tmp_path, monkeypatch):
+     c = _client(tmp_path, monkeypatch)
+     settings = c.app.state.settings
+     (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+     r = c.post(
+         "/api/v1/videos",
+         headers=_headers(),
+         data={
+             "voice": "en-US-EmmaNeural",
+             "story": "Hi.\n",
