@@ -1,92 +1,119 @@
-### Task 2: `first_sentence_end_s` + `render_reddit_card`
+### Task 2: Reddit jobs use hook cover instead of 2× screenshot
 
 **Files:**
-- Create: `src/roblox_viral/reddit_card.py`
-- Create: `tests/test_reddit_card.py`
+- Modify: `src/roblox_viral/web/jobs.py`
+- Modify: `tests/web/test_jobs.py`
 
 **Interfaces:**
-- Produces:
+- Consumes: `split_hook`, `render_hook_cover` from Task 1
+- Produces: Reddit `create` calls `split_hook(sentences[0])`; `run_job` writes cover via `render_hook_cover` to `outputs/{stem}-card.png`; overlay still `render_reddit_card(..., scale=1.0)` only (no second call at scale 2.0)
+
+- [ ] **Step 1: Write failing tests**
+
+Append to `tests/web/test_jobs.py`:
 
 ```python
-DEFAULT_REDDIT_USERNAME = "Resident_Vehicle2780"
-CARD_WIDTH = 972  # ~90% of 1080
-CARD_BG = (26, 26, 27, 255)  # #1A1A1B
-
-def first_sentence_end_s(
-    sentences: list[str],
-    words: list[WordTiming],
-    *,
-    fallback_s: float = 2.0,
-) -> float:
-    """Return end time (seconds) of first sentence; fallback if no words."""
-
-def render_reddit_card(
-    title: str,
-    output_path: Path | str,
-    *,
-    username: str = DEFAULT_REDDIT_USERNAME,
-    avatar_path: Path | str | None = None,
-) -> Path:
-    """Write RGBA PNG; return path. Width CARD_WIDTH; height from content."""
+def test_create_reddit_rejects_hook_without_dash(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "one.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    with pytest.raises(ValueError, match="phrase - phrase"):
+        mgr.create(s, "", "Hello world.\nSecond.\n", "en-US-EmmaNeural", mode="reddit")
 ```
 
-`first_sentence_end_s` implementation:
+In `test_run_reddit_passes_title_card_and_no_greenscreen`:
+
+- Change `story` to `"First sentence here - Second hook.\nSecond line.\n"`
+- After fakes, add:
 
 ```python
-groups = partition_words_by_sentences(sentences, words)
-if not groups or not groups[0]:
-    return fallback_s
-return groups[0][-1].end_ms / 1000.0
+    def fake_render_hook_cover(top, bottom, output_path, *, template_path=None):
+        seen.setdefault("covers", []).append((top, bottom, Path(output_path)))
+        Path(output_path).write_bytes(b"hook-png")
+
+    monkeypatch.setattr(
+        jobs_module, "render_hook_cover", fake_render_hook_cover, raising=False
+    )
 ```
 
-Card layout (Pillow):
-- Load avatar (default packaged); resize to ~40px circle (mask)
-- Header row: avatar | username (white) | "3d" (gray) | kebab menu right-aligned
-- Title: bold white, wrap to card inner width, line spacing
-- Padding ~24px; dark fill rectangle
+- Change assertions: `seen["cards"]` has **length 1**, scale `1.0`, title `"First sentence here - Second hook."`
+- Assert `seen["covers"][0][0] == "First sentence here"`
+- Assert `seen["covers"][0][1] == "Second hook."`
+- Assert `str(seen["covers"][0][2]).endswith("-card.png")`
+- Remove `assert seen["cards"][1][2] == 2.0`
 
-- [ ] **Step 1: Failing tests**
+In `test_run_reddit_copies_title_card_to_outputs`:
+
+- Story: `"One line only here - Bottom phrase.\n"`
+- Replace reliance on `fake_render_reddit_card` writing the **outputs** file. Keep overlay fake; add:
 
 ```python
-from roblox_viral.voice import WordTiming
-from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
+    def fake_render_hook_cover(top, bottom, output_path, *, template_path=None):
+        Path(output_path).write_bytes(b"hook-png")
 
-
-def test_first_sentence_end_s():
-    sentences = ["Hello world.", "Second line."]
-    words = [
-        WordTiming("Hello", 0, 200),
-        WordTiming("world.", 200, 500),
-        WordTiming("Second", 500, 800),
-        WordTiming("line.", 800, 1000),
-    ]
-    assert abs(first_sentence_end_s(sentences, words) - 0.5) < 1e-6
-
-
-def test_first_sentence_end_s_fallback_empty_words():
-    assert first_sentence_end_s(["Hi."], []) == 2.0
-
-
-def test_render_reddit_card_writes_png(tmp_path):
-    out = tmp_path / "card.png"
-    path = render_reddit_card("Company copied my code after refusing to pay.", out)
-    assert path.is_file()
-    from PIL import Image
-    im = Image.open(path)
-    assert im.size[0] == 972
-    assert im.size[1] > 80
-    assert im.mode in ("RGBA", "RGB")
+    monkeypatch.setattr(
+        jobs_module, "render_hook_cover", fake_render_hook_cover, raising=False
+    )
 ```
 
-- [ ] **Step 2: Run — expect FAIL**
+- Assert `card_path.read_bytes() == b"hook-png"` (not `b"png-card"`)
 
-Run: `pytest tests/test_reddit_card.py -v`
+Update **every** `mgr.create(..., mode="reddit")` story in this file so the first line has exactly one `-` (existing tests will 400 otherwise), e.g. `"Hello - world.\n"`, `"One line only - here.\n"`. Search `mode="reddit"` and fix each story.
 
-- [ ] **Step 3: Implement `reddit_card.py`**
+- [ ] **Step 2: Run tests to verify they fail**
 
-- [ ] **Step 4: PASS**
+Run: `python -m pytest tests/web/test_jobs.py -k reddit -v`
 
-- [ ] **Step 5: Commit** `feat: generate Reddit title card PNG with Pillow`
+Expected: new reject test FAIL (create succeeds) and/or 2× card assertions still expecting two `render_reddit_card` calls.
+
+- [ ] **Step 3: Wire jobs**
+
+In `src/roblox_viral/web/jobs.py`:
+
+1. Import:
+
+```python
+from roblox_viral.hook_cover import render_hook_cover, split_hook
+```
+
+2. In `create`, after `if not sentences: raise ValueError("Story is empty")`:
+
+```python
+        if mode == "reddit":
+            split_hook(sentences[0])
+```
+
+3. Replace the block that calls `render_reddit_card` twice. Keep 1× overlay; write cover with `render_hook_cover`:
+
+```python
+            if record.mode == "reddit":
+                title_card_until_s = first_sentence_end_s(sentences, words)
+                title_card_path = job_dir / "reddit_card.png"
+                render_reddit_card(sentences[0], title_card_path, scale=1.0)
+                top, bottom = split_hook(sentences[0])
+                title_card_download_name = f"{Path(output_name).stem}-card.png"
+                settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+                render_hook_cover(
+                    top,
+                    bottom,
+                    settings.outputs_dir / title_card_download_name,
+                )
+```
+
+Do not call `render_reddit_card(..., scale=2.0)`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `python -m pytest tests/web/test_jobs.py tests/test_hook_cover.py -v`
+
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/roblox_viral/web/jobs.py tests/web/test_jobs.py
+git commit -m "feat(web): Reddit jobs write hook cover instead of 2x screenshot"
+```
 
 ---
 
