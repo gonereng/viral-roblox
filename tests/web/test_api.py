@@ -227,6 +227,8 @@ def test_generate_page_video_speed_bounds(tmp_path, monkeypatch):
     assert 'max="200"' in r.text
     assert 'data-single-min="50"' in r.text
     assert 'data-reddit-max="500"' in r.text
+    assert 'id="video-speed-bounds"' in r.text
+    assert 'src="/static/app.js?v=reddit-500"' in r.text
 
 
 def test_generate_page_has_hidden_title_card_download(tmp_path, monkeypatch):

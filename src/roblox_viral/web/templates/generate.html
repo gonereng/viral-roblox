@@ -81,6 +81,7 @@
 
     <label class="slider-field" id="video-speed-field">
       Video speed <span id="video-speed-value">100%</span>
+      <span id="video-speed-bounds" class="slider-bounds">50–200%</span>
       <input id="video_speed" name="video_speed" type="range" min="50" max="200" step="1" value="100"
              data-single-min="50" data-single-max="200"
              data-reddit-min="100" data-reddit-max="500" />
@@ -120,5 +121,5 @@
   </section>
 {% endblock %}
 {% block scripts %}
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=reddit-500" defer></script>
 {% endblock %}

@@ -45,6 +45,7 @@
   const pitchValue = document.getElementById("pitch-value");
   const speedValue = document.getElementById("speed-value");
   const videoSpeedValue = document.getElementById("video-speed-value");
+  const videoSpeedBounds = document.getElementById("video-speed-bounds");
   const videoSpeedField = document.getElementById("video-speed-field");
 
   function formatPitchLabel(n) {
@@ -92,17 +93,26 @@
     }
   }
   const VIDEO_BOUNDS = {
-    single: { min: 50, max: 200 },
-    reddit: { min: 100, max: 500 },
+    single: {
+      min: Number(videoSpeedInput?.dataset.singleMin) || 50,
+      max: Number(videoSpeedInput?.dataset.singleMax) || 200,
+    },
+    reddit: {
+      min: Number(videoSpeedInput?.dataset.redditMin) || 100,
+      max: Number(videoSpeedInput?.dataset.redditMax) || 500,
+    },
   };
   function clampVideoSpeedForMode(mode) {
     if (!videoSpeedInput) return;
     const b = VIDEO_BOUNDS[mode === "reddit" ? "reddit" : "single"];
+    videoSpeedInput.setAttribute("min", String(b.min));
+    videoSpeedInput.setAttribute("max", String(b.max));
     videoSpeedInput.min = String(b.min);
     videoSpeedInput.max = String(b.max);
     const v = Number(videoSpeedInput.value);
     if (v < b.min) videoSpeedInput.value = String(b.min);
     if (v > b.max) videoSpeedInput.value = String(b.max);
+    if (videoSpeedBounds) videoSpeedBounds.textContent = `${b.min}–${b.max}%`;
     syncVoiceSliders();
   }
   function setMode(mode) {

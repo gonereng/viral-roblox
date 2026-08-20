@@ -247,6 +247,11 @@ button:disabled {
 .slider-field span {
   font-variant-numeric: tabular-nums;
 }
+.slider-bounds {
+  margin-left: 0.35rem;
+  opacity: 0.7;
+  font-size: 0.9em;
+}
 
 .visually-hidden {
   position: absolute;
