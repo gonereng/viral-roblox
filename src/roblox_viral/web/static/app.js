@@ -96,7 +96,7 @@
     reddit: { min: 100, max: 500 },
   };
   function clampVideoSpeedForMode(mode) {
-    if (!videoSpeedInput || mode === "picture") return;
+    if (!videoSpeedInput) return;
     const b = VIDEO_BOUNDS[mode === "reddit" ? "reddit" : "single"];
     videoSpeedInput.min = String(b.min);
     videoSpeedInput.max = String(b.max);
