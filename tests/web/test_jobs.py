@@ -780,23 +780,30 @@ def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
     assert loaded.title_card_name == job.title_card_name
 
 
-def test_run_single_still_uses_greenscreen(tmp_path, monkeypatch):
+def test_run_single_passes_x_card_and_no_greenscreen(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     mgr = JobManager()
     seen = {}
 
     def fake_synthesize(self, text, output_path):
         Path(output_path).write_bytes(b"mp3")
-        return [WordTiming("One", 0, 100)]
+        return [
+            WordTiming("One", 0, 200),
+            WordTiming("line", 200, 500),
+        ]
 
     def fake_write_ass(words, ass_path, sentences=None):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
 
+    def fake_render_x_card(body, output_path, **kwargs):
+        Path(output_path).write_bytes(b"png")
+        return Path(output_path)
+
     def fake_render_video(**kwargs):
-        seen.update(kwargs)
+        seen["render"] = kwargs
         Path(kwargs["output_path"]).write_bytes(b"mp4")
 
-    def boom_card(*args, **kwargs):
+    def boom_reddit(*args, **kwargs):
         raise AssertionError("render_reddit_card should not run for single jobs")
 
     monkeypatch.setattr(
@@ -804,12 +811,16 @@ def test_run_single_still_uses_greenscreen(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
-    monkeypatch.setattr(jobs_module, "render_reddit_card", boom_card, raising=False)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_x_card", fake_render_x_card)
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.render_reddit_card", boom_reddit, raising=False
+    )
 
     job = mgr.create(s, "clip.mp4", "One line only here.\n", "en-US-EmmaNeural")
     mgr.run_job(s, job.id)
 
-    assert seen["overlay_path"] == s.overlay_video_path
-    assert seen.get("title_card_path") is None
-    assert seen.get("title_card_until_s") is None
+    assert seen["render"]["overlay_path"] is None
+    assert str(seen["render"]["title_card_path"]).endswith("x_card.png")
+    assert seen["render"]["title_card_until_s"] == 0.5
     assert mgr.get(job.id, s).status == "done"
+    assert mgr.get(job.id, s).title_card_name is None
