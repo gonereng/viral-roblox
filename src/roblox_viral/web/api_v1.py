@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import asdict
 from pathlib import Path
 
@@ -88,10 +89,19 @@ async def create_video(
             detail="Provide either media file or source_name, not both",
         )
     elif not has_media and not name:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide media file or source_name",
-        )
+        if mode == "single":
+            sources = library_mod.list_sources(settings)
+            if not sources:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No source videos available",
+                )
+            name = random.choice(sources).name
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide media file or source_name",
+            )
 
     voice_s = (voice or "").strip() or DEFAULT_VOICE
     try:

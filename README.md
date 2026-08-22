@@ -114,7 +114,8 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 
 - `voice`, `story`, `type` (`single`|`reddit`|`leni`; `roblox` is rejected — use `single`)
 - optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50–200 for `single`/`leni`, 100–500 for `reddit`; default 100)
-- for `single` or `leni`: either file field `media` **or** text field `source_name` (Library clip or raw video/image name)
+- for `single`: optional `media` **or** `source_name` (Library Sources slice). If neither is sent, a random Sources clip is chosen. Do not send both.
+- for `leni`: either file field `media` **or** text field `source_name` (Library image name)
 - for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)
 
 Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`; then download the cover with `GET /api/v1/videos/{id}/cover` (Reddit only; 404 for other types).

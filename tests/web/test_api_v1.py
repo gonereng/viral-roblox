@@ -414,7 +414,32 @@ def test_create_rejects_both_media_and_source_name(tmp_path, monkeypatch):
     assert r.status_code == 400
 
 
-def test_create_rejects_neither_media_nor_source(tmp_path, monkeypatch):
+def test_create_single_neither_picks_random_source(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "a.mp4").write_bytes(b"vid")
+    (settings.sources_dir / "b.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "roblox_viral.web.api_v1.random.choice",
+        lambda seq: next(s for s in seq if s.name == "b.mp4"),
+    )
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "single",
+        },
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["source_name"] == "b.mp4"
+    assert st.json()["mode"] == "single"
+
+
+def test_create_single_neither_empty_sources_400(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     r = c.post(
         "/api/v1/videos",
@@ -423,6 +448,22 @@ def test_create_rejects_neither_media_nor_source(tmp_path, monkeypatch):
             "voice": "en-US-EmmaNeural",
             "story": "Hi.\n",
             "type": "single",
+        },
+    )
+    assert r.status_code == 400
+    assert "source" in r.json()["detail"].lower()
+
+
+def test_create_leni_still_requires_media_or_source(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    (c.app.state.settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Hi.\n",
+            "type": "leni",
         },
     )
     assert r.status_code == 400
