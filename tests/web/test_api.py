@@ -364,6 +364,9 @@ def test_generate_page_has_three_mode_tab_controls(tmp_path, monkeypatch):
     assert 'data-mode="reddit"' in r.text
     assert "Single background video" in r.text
     assert "Uses random clips from Library → Videos" in r.text
+    assert 'id="reddit-hook-hint"' in r.text
+    assert "first story line must be" in r.text.lower()
+    assert "phrase - phrase" in r.text
     assert 'id="tab-roblox"' not in r.text
     assert 'data-mode="roblox"' not in r.text
     assert ">Roblox</button>" not in r.text
@@ -406,7 +409,7 @@ def test_create_job_reddit_mode(tmp_path, monkeypatch):
         json={
             "mode": "reddit",
             "source_name": "",
-            "story": "Hi there.\n",
+            "story": "Hi - there.\n",
             "voice": "en-US-EmmaNeural",
         },
     )

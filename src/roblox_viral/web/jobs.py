@@ -11,6 +11,7 @@ from typing import Literal
 from pathlib import Path
 
 from roblox_viral.captions import write_ass
+from roblox_viral.hook_cover import render_hook_cover, split_hook
 from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
 from roblox_viral.reddit_clips import (
     plan_reddit_sentence_clips,
@@ -137,6 +138,8 @@ class JobManager:
         sentences = split_sentences(story)
         if not sentences:
             raise ValueError("Story is empty")
+        if mode == "reddit":
+            split_hook(sentences[0])
 
         with self._lock:
             if self._active_id is not None:
@@ -261,12 +264,13 @@ class JobManager:
                 title_card_until_s = first_sentence_end_s(sentences, words)
                 title_card_path = job_dir / "reddit_card.png"
                 render_reddit_card(sentences[0], title_card_path, scale=1.0)
+                top, bottom = split_hook(sentences[0])
                 title_card_download_name = f"{Path(output_name).stem}-card.png"
                 settings.outputs_dir.mkdir(parents=True, exist_ok=True)
-                render_reddit_card(
-                    sentences[0],
+                render_hook_cover(
+                    top,
+                    bottom,
                     settings.outputs_dir / title_card_download_name,
-                    scale=2.0,
                 )
 
             self._set_status(settings, record, "rendering")

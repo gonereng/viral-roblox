@@ -68,7 +68,7 @@ On **Generate**, pick a background mode via three tabs:
 | **Picture** | Pick an image from Library → Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
 | **Reddit** | No source picker — one library video per sentence (bag pop, reshuffle when empty). **Video speed** slider (100–500%, default 100%). Requires at least one video in the Videos pool. |
 
-**Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The in-video card uses the original (1×) size; a larger (~2×) PNG can be downloaded from the result panel after a Reddit job completes. The subscribe greenscreen overlay is not used for Reddit yet.
+**Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The in-video card is unchanged. After generate, **Download title card** is a cover PNG: the packaged Snoo template with the first story line split on a single `-` (`phrase - phrase`) drawn in the two boxes. n8n: `GET /api/v1/videos/{id}/cover`.
 
 The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080×1920 frame** (2× the former half-height target), chromakeyed, and centered. Applies to **Single** only.
 
@@ -117,7 +117,7 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 - for `single` or `leni`: either file field `media` **or** text field `source_name` (Library clip or raw video/image name)
 - for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)
 
-Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`.
+Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`; then download the cover with `GET /api/v1/videos/{id}/cover` (Reddit only; 404 for other types).
 
 PowerShell / Windows (upload via `curl.exe` — works on PowerShell 5.1):
 

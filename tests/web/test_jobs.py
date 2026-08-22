@@ -456,17 +456,25 @@ def test_create_reddit_requires_videos_pool(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     mgr = JobManager()
     with pytest.raises(ValueError, match="video"):
-        mgr.create(s, "", "Hello world.\n", "en-US-EmmaNeural", mode="reddit")
+        mgr.create(s, "", "Hello - world.\n", "en-US-EmmaNeural", mode="reddit")
 
 
 def test_create_reddit_ok_with_videos(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     (s.videos_dir / "background.mp4").write_bytes(b"vid")
     mgr = JobManager()
-    job = mgr.create(s, "", "Hello world.\n", "en-US-EmmaNeural", mode="reddit")
+    job = mgr.create(s, "", "Hello - world.\n", "en-US-EmmaNeural", mode="reddit")
     assert job.mode == "reddit"
     assert job.source_name in ("", "reddit")
     assert job.ken_burns is False
+
+
+def test_create_reddit_rejects_hook_without_dash(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "one.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    with pytest.raises(ValueError, match="phrase - phrase"):
+        mgr.create(s, "", "Hello world.\nSecond.\n", "en-US-EmmaNeural", mode="reddit")
 
 
 def test_hydrate_roblox_mode_as_single(tmp_path, monkeypatch):
@@ -531,7 +539,7 @@ def test_run_reddit_builds_background_and_renders(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
 
-    job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
+    job = mgr.create(s, "", "One line only - here.\n", "en-US-EmmaNeural", mode="reddit")
     mgr.run_job(s, job.id)
 
     reddit_bg = s.jobs_dir / job.id / "reddit_bg.mp4"
@@ -597,7 +605,7 @@ def test_run_reddit_plans_by_sentence_durations(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
 
-    story = "First sentence here.\nSecond line.\n"
+    story = "First sentence - here.\nSecond line.\n"
     job = mgr.create(
         s,
         "",
@@ -648,6 +656,10 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
         )
         Path(output_path).write_bytes(b"png")
 
+    def fake_render_hook_cover(top, bottom, output_path, *, template_path=None):
+        seen.setdefault("covers", []).append((top, bottom, Path(output_path)))
+        Path(output_path).write_bytes(b"hook-png")
+
     def fake_first_sentence_end_s(sentences, words):
         seen["timing"] = (sentences, words)
         return 0.5
@@ -671,18 +683,24 @@ def test_run_reddit_passes_title_card_and_no_greenscreen(tmp_path, monkeypatch):
         jobs_module, "render_reddit_card", fake_render_reddit_card, raising=False
     )
     monkeypatch.setattr(
+        jobs_module, "render_hook_cover", fake_render_hook_cover, raising=False
+    )
+    monkeypatch.setattr(
         jobs_module, "first_sentence_end_s", fake_first_sentence_end_s, raising=False
     )
     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
 
-    story = "First sentence here.\nSecond line.\n"
+    story = "First sentence here - Second hook.\nSecond line.\n"
     job = mgr.create(s, "", story, "en-US-EmmaNeural", mode="reddit")
     mgr.run_job(s, job.id)
 
-    assert seen["cards"][0][0] == "First sentence here."
+    assert len(seen["cards"]) == 1
+    assert seen["cards"][0][0] == "First sentence here - Second hook."
     assert seen["cards"][0][1] == s.jobs_dir / job.id / "reddit_card.png"
     assert seen["cards"][0][2] == 1.0
-    assert seen["cards"][1][2] == 2.0
+    assert seen["covers"][0][0] == "First sentence here"
+    assert seen["covers"][0][1] == "Second hook."
+    assert str(seen["covers"][0][2]).endswith("-card.png")
     assert seen["render"]["overlay_path"] is None
     assert str(seen["render"]["title_card_path"]).endswith("reddit_card.png")
     assert seen["render"]["title_card_until_s"] == 0.5
@@ -713,6 +731,9 @@ def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
     def fake_render_reddit_card(title, output_path, *, scale=2.0):
         Path(output_path).write_bytes(b"png-card")
 
+    def fake_render_hook_cover(top, bottom, output_path, *, template_path=None):
+        Path(output_path).write_bytes(b"hook-png")
+
     def fake_render_video(**kwargs):
         Path(kwargs["output_path"]).write_bytes(b"mp4")
 
@@ -732,9 +753,18 @@ def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(
         jobs_module, "render_reddit_card", fake_render_reddit_card, raising=False
     )
+    monkeypatch.setattr(
+        jobs_module, "render_hook_cover", fake_render_hook_cover, raising=False
+    )
     monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
 
-    job = mgr.create(s, "", "One line only here.\n", "en-US-EmmaNeural", mode="reddit")
+    job = mgr.create(
+        s,
+        "",
+        "One line only here - Bottom phrase.\n",
+        "en-US-EmmaNeural",
+        mode="reddit",
+    )
     mgr.run_job(s, job.id)
 
     job = mgr.get(job.id, s)
@@ -743,7 +773,7 @@ def test_run_reddit_copies_title_card_to_outputs(tmp_path, monkeypatch):
     assert job.title_card_name.endswith("-card.png")
     card_path = s.outputs_dir / job.title_card_name
     assert card_path.is_file()
-    assert card_path.read_bytes() == b"png-card"
+    assert card_path.read_bytes() == b"hook-png"
 
     loaded = JobManager().get(job.id, s)
     assert loaded is not None
