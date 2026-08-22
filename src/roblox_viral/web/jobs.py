@@ -12,6 +12,7 @@ from pathlib import Path
 
 from roblox_viral.captions import write_ass
 from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
+from roblox_viral.x_card import render_x_card
 from roblox_viral.reddit_clips import (
     plan_reddit_sentence_clips,
     sentence_durations_s,
@@ -268,6 +269,10 @@ class JobManager:
                     settings.outputs_dir / title_card_download_name,
                     scale=2.0,
                 )
+            elif record.mode == "single":
+                title_card_until_s = first_sentence_end_s(sentences, words)
+                title_card_path = job_dir / "x_card.png"
+                render_x_card(sentences[0], title_card_path)
 
             self._set_status(settings, record, "rendering")
             if record.ephemeral:
@@ -312,7 +317,9 @@ class JobManager:
                 )
             else:
                 overlay_path = (
-                    None if record.mode == "reddit" else settings.overlay_video_path
+                    None
+                    if record.mode in ("reddit", "single")
+                    else settings.overlay_video_path
                 )
                 render_video(
                     video_path=media_path,

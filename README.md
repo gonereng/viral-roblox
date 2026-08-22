@@ -64,13 +64,13 @@ On **Generate**, pick a background mode via three tabs:
 
 | Tab | Behavior |
 |-----|----------|
-| **Single background video** | Pick a one-minute clip from Library → 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Greenscreen overlay at start. |
+| **Single background video** | Pick a one-minute clip from Library → 1-minute clips (`media/sources/`). Loops that clip to TTS length. **Video speed** slider (50–200%, default 100%) independent of voice pitch/speed. Shows an X-style hook card with the first story line until that sentence ends; the greenscreen subscribe overlay is not used on Single while this card is active. |
 | **Picture** | Pick an image from Library → Images. Optional **Ken Burns** slow zoom. No overlay; no video speed. |
 | **Reddit** | No source picker — one library video per sentence (bag pop, reshuffle when empty). **Video speed** slider (100–500%, default 100%). Requires at least one video in the Videos pool. |
 
 **Reddit** shows a title card with the first story line, centered until that sentence finishes in the narration. The in-video card uses the original (1×) size; a larger (~2×) PNG can be downloaded from the result panel after a Reddit job completes. The subscribe greenscreen overlay is not used for Reddit yet.
 
-The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080×1920 frame** (2× the former half-height target), chromakeyed, and centered. Applies to **Single** only.
+The optional greenscreen overlay (first 3.5s) is scaled to **fit inside the full 1080×1920 frame** (2× the former half-height target), chromakeyed, and centered. Not used for **Single** or **Reddit** (both use title cards instead).
 
 ### Local run
 
