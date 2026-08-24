@@ -68,6 +68,18 @@ def test_list_outputs_newest_first(tmp_path, monkeypatch):
 
     listed = library.list_outputs(s)
     assert [o.name for o in listed] == ["newer.mp4", "older.mp4"]
+    assert all(o.title_card_name is None for o in listed)
+
+
+def test_list_outputs_includes_title_card_when_present(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.outputs_dir / "story.mp4").write_bytes(b"vid")
+    (s.outputs_dir / "story-card.png").write_bytes(b"png")
+    (s.outputs_dir / "plain.mp4").write_bytes(b"vid")
+
+    listed = {o.name: o for o in library.list_outputs(s)}
+    assert listed["story.mp4"].title_card_name == "story-card.png"
+    assert listed["plain.mp4"].title_card_name is None
 
 
 def test_save_upload_slices_and_discards_short_tail(tmp_path, monkeypatch):

@@ -59,6 +59,7 @@ class OutputVideo:
     name: str
     path: Path
     size_bytes: int
+    title_card_name: str | None = None
 
 
 def _safe_name(name: str) -> str:
@@ -175,7 +176,19 @@ def list_outputs(settings: Settings, *, limit: int = 10) -> list[OutputVideo]:
         if p.is_file() and p.suffix.lower() == ".mp4"
     ]
     paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return [OutputVideo(p.name, p, p.stat().st_size) for p in paths[:limit]]
+    items: list[OutputVideo] = []
+    for p in paths[:limit]:
+        card_name = f"{p.stem}-card.png"
+        card_path = settings.outputs_dir / card_name
+        items.append(
+            OutputVideo(
+                p.name,
+                p,
+                p.stat().st_size,
+                title_card_name=card_name if card_path.is_file() else None,
+            )
+        )
+    return items
 
 
 def resolve_source(settings: Settings, name: str) -> Path:
