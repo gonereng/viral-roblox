@@ -25,6 +25,13 @@ from roblox_viral.render import (
     render_video,
 )
 from roblox_viral.story import join_for_tts, split_sentences
+from roblox_viral.gemini_tts import (
+    DEFAULT_GEMINI_VOICE,
+    DEFAULT_TTS_PROVIDER,
+    GeminiTTSProvider,
+    normalize_tts_provider,
+    validate_gemini_voice,
+)
 from roblox_viral.voice import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
@@ -88,6 +95,7 @@ class JobRecord:
     created_slices: list[str] | None = None
     ephemeral: bool = False
     title_card_name: str | None = None
+    tts_provider: str = DEFAULT_TTS_PROVIDER
 
 
 class JobManager:
@@ -111,11 +119,17 @@ class JobManager:
         mode: str = "single",
         ken_burns: bool = False,
         ephemeral: bool = False,
+        tts_provider: str = DEFAULT_TTS_PROVIDER,
     ) -> JobRecord:
         format_edge_pitch(pitch)
         format_edge_rate(speed)
         mode = normalize_mode(mode)
         validate_video_speed(video_speed, mode=mode)
+        provider = normalize_tts_provider(tts_provider)
+        if provider == "gemini":
+            if not (settings.gemini_api_key or "").strip():
+                raise ValueError("GEMINI_API_KEY is not configured")
+            voice = validate_gemini_voice(voice or DEFAULT_GEMINI_VOICE)
         if mode == "reddit":
             if not list_videos(settings):
                 raise ValueError("Reddit mode requires at least one video")
@@ -161,6 +175,7 @@ class JobManager:
                 mode=mode,
                 ken_burns=ken_burns,
                 ephemeral=ephemeral,
+                tts_provider=provider,
             )
             self._jobs[job_id] = record
             self._stories[job_id] = story
@@ -216,6 +231,9 @@ class JobManager:
                 created_slices=data.get("created_slices"),
                 ephemeral=bool(data.get("ephemeral", False)),
                 title_card_name=data.get("title_card_name"),
+                tts_provider=normalize_tts_provider(
+                    str(data.get("tts_provider") or DEFAULT_TTS_PROVIDER)
+                ),
             )
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
@@ -249,11 +267,18 @@ class JobManager:
             output_path = settings.outputs_dir / output_name
 
             self._set_status(settings, record, "synthesizing")
-            words = EdgeTTSProvider(
-                record.voice,
-                rate=format_edge_rate(record.speed),
-                pitch=format_edge_pitch(record.pitch),
-            ).synthesize(join_for_tts(sentences), narration_path)
+            tts_text = join_for_tts(sentences)
+            if record.tts_provider == "gemini":
+                words = GeminiTTSProvider(
+                    settings.gemini_api_key,
+                    record.voice,
+                ).synthesize(tts_text, narration_path)
+            else:
+                words = EdgeTTSProvider(
+                    record.voice,
+                    rate=format_edge_rate(record.speed),
+                    pitch=format_edge_pitch(record.pitch),
+                ).synthesize(tts_text, narration_path)
 
             self._set_status(settings, record, "captioning")
             write_ass(words, ass_path, sentences=sentences)

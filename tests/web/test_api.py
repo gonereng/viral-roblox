@@ -228,7 +228,7 @@ def test_generate_page_video_speed_bounds(tmp_path, monkeypatch):
     assert 'data-single-min="50"' in r.text
     assert 'data-reddit-max="500"' in r.text
     assert 'id="video-speed-bounds"' in r.text
-    assert 'src="/static/app.js?v=reddit-500"' in r.text
+    assert 'src="/static/app.js?v=gemini-tts"' in r.text
 
 
 def test_generate_page_has_hidden_title_card_download(tmp_path, monkeypatch):
@@ -242,6 +242,22 @@ def test_generate_page_has_hidden_title_card_download(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert 'id="download-card"' in r.text
     assert "Download title card" in r.text
+
+
+def test_generate_page_has_tts_provider_toggle(tmp_path, monkeypatch):
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    r = c.get("/")
+    assert r.status_code == 200
+    assert 'name="tts_provider"' in r.text
+    assert 'value="gemini"' in r.text
+    assert 'data-provider="gemini"' in r.text
+    assert "Kore" in r.text
+    assert 'id="edge-voice-controls"' in r.text
 
 
 def test_generate_page_lists_recent_outputs(tmp_path, monkeypatch):
@@ -264,6 +280,28 @@ def test_generate_page_lists_recent_outputs(tmp_path, monkeypatch):
     assert "older.mp4" in r.text
     assert "newer.mp4" in r.text
     assert "/media/outputs/newer.mp4" in r.text
+
+
+def test_generate_page_recent_outputs_title_card_link(tmp_path, monkeypatch):
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr(
+        "roblox_viral.web.app.list_english_voices", fake_voices
+    )
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    settings = c.app.state.settings
+    settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+    (settings.outputs_dir / "reddit-out.mp4").write_bytes(b"vid")
+    (settings.outputs_dir / "reddit-out-card.png").write_bytes(b"png")
+    (settings.outputs_dir / "no-card.mp4").write_bytes(b"vid")
+
+    r = c.get("/")
+    assert r.status_code == 200
+    assert 'href="/media/outputs/reddit-out-card.png"' in r.text
+    assert 'href="/media/outputs/no-card-card.png"' not in r.text
+    assert "Download title card" in r.text
 
 
 def test_create_job_accepts_pitch_and_speed(tmp_path, monkeypatch):

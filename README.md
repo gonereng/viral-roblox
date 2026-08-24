@@ -114,6 +114,7 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 
 - `voice`, `story`, `type` (`single`|`reddit`|`leni`; `roblox` is rejected — use `single`)
 - optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50–200 for `single`/`leni`, 100–500 for `reddit`; default 100)
+- optional `tts_provider` (`edge`|`gemini`, default `edge`). For `gemini`, set `voice` to a Gemini name (e.g. `Kore`); requires `GEMINI_API_KEY`. Pitch/speed apply to Edge only.
 - for `single`: optional `media` **or** `source_name` (Library Sources slice). If neither is sent, a random Sources clip is chosen. Do not send both.
 - for `leni`: either file field `media` **or** text field `source_name` (Library image name)
 - for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)

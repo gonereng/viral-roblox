@@ -61,17 +61,36 @@
       <p id="story-gen-error" class="error" hidden></p>
     </div>
 
+    <div class="tts-provider" role="radiogroup" aria-label="Voice engine">
+      <label class="tts-option">
+        <input type="radio" name="tts_provider" value="edge" checked>
+        Edge TTS
+      </label>
+      <label class="tts-option">
+        <input type="radio" name="tts_provider" value="gemini">
+        Gemini
+      </label>
+    </div>
+
     <label>
       Voice
-      <select id="voice" name="voice" required>
+      <select id="voice" name="voice" required
+              data-default-edge="{{ default_voice }}"
+              data-default-gemini="{{ default_gemini_voice }}">
         {% for v in voices %}
-        <option value="{{ v.short_name }}"{% if v.short_name == default_voice %} selected{% endif %}>
+        <option value="{{ v.short_name }}" data-provider="edge"{% if v.short_name == default_voice %} selected{% endif %}>
           {{ v.short_name }} ({{ v.gender }})
+        </option>
+        {% endfor %}
+        {% for name in gemini_voices %}
+        <option value="{{ name }}" data-provider="gemini" hidden{% if name == default_gemini_voice %} data-gemini-default="1"{% endif %}>
+          {{ name }}
         </option>
         {% endfor %}
       </select>
     </label>
 
+    <div id="edge-voice-controls">
     <label class="slider-field">
       Pitch <span id="pitch-value">+15%</span>
       <input id="pitch" name="pitch" type="range" min="-100" max="100" step="1" value="15" />
@@ -81,6 +100,7 @@
       Speed <span id="speed-value">130%</span>
       <input id="speed" name="speed" type="range" min="50" max="200" step="1" value="130" />
     </label>
+    </div>
 
     <label class="slider-field" id="video-speed-field">
       Video speed <span id="video-speed-value">100%</span>
@@ -115,6 +135,9 @@
         <span>{{ o.name }}</span>
         <span class="meta">{{ o.size_bytes }} bytes</span>
         <a href="/media/outputs/{{ o.name }}">Play / download</a>
+        {% if o.title_card_name %}
+        <a href="/media/outputs/{{ o.title_card_name }}" download>Download title card</a>
+        {% endif %}
       </li>
       {% endfor %}
     </ul>
@@ -124,5 +147,5 @@
   </section>
 {% endblock %}
 {% block scripts %}
-  <script src="/static/app.js?v=reddit-500" defer></script>
+  <script src="/static/app.js?v=gemini-tts" defer></script>
 {% endblock %}

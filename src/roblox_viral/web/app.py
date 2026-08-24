@@ -22,6 +22,13 @@ from pydantic import BaseModel, ValidationError
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_303_SEE_OTHER, HTTP_409_CONFLICT
 
+from roblox_viral.gemini_tts import (
+    DEFAULT_GEMINI_VOICE,
+    DEFAULT_TTS_PROVIDER,
+    GEMINI_VOICES,
+    normalize_tts_provider,
+    validate_gemini_voice,
+)
 from roblox_viral.voice import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
@@ -89,6 +96,7 @@ class CreateJobBody(BaseModel):
     video_speed: int | None = None
     mode: str = "single"
     ken_burns: bool = False
+    tts_provider: str | None = None
 
 
 async def _read_upload_capped(
@@ -183,6 +191,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "has_videos": bool(videos),
                 "voices": voices,
                 "default_voice": DEFAULT_VOICE,
+                "gemini_voices": list(GEMINI_VOICES),
+                "default_gemini_voice": DEFAULT_GEMINI_VOICE,
                 "recent_outputs": list_outputs(settings),
                 "images": list_images(settings),
             },
@@ -415,7 +425,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from exc
         source_name = body.source_name
         story = body.story
-        voice = body.voice or DEFAULT_VOICE
         pitch = DEFAULT_PITCH if body.pitch is None else body.pitch
         speed = DEFAULT_SPEED if body.speed is None else body.speed
         video_speed = (
@@ -426,8 +435,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             format_edge_rate(speed)
             mode = normalize_mode(body.mode)
             validate_video_speed(video_speed, mode=mode)
+            tts_provider = normalize_tts_provider(body.tts_provider)
+            if tts_provider == "gemini":
+                voice = validate_gemini_voice(
+                    body.voice or DEFAULT_GEMINI_VOICE
+                )
+            else:
+                voice = body.voice or DEFAULT_VOICE
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            detail = str(exc)
+            status = 503 if "GEMINI_API_KEY" in detail else 400
+            raise HTTPException(status_code=status, detail=detail) from exc
         try:
             record = mgr.create(
                 settings,
@@ -439,6 +457,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 video_speed=video_speed,
                 mode=mode,
                 ken_burns=body.ken_burns,
+                tts_provider=tts_provider,
             )
         except BusyError as exc:
             raise HTTPException(
@@ -446,7 +465,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail=str(exc),
             ) from exc
         except (ValueError, FileNotFoundError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            detail = str(exc)
+            status = 503 if "GEMINI_API_KEY" in detail else 400
+            raise HTTPException(status_code=status, detail=detail) from exc
         background_tasks.add_task(mgr.run_job, settings, record.id)
         return {"id": record.id, "status": record.status}
 

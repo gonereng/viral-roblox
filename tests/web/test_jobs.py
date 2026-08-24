@@ -435,6 +435,71 @@ def test_run_job_passes_video_speed_to_render(tmp_path, monkeypatch):
     assert mgr.get(job.id, s).status == "done"
 
 
+def test_run_job_gemini_uses_gemini_provider(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    seen = {}
+
+    def fake_gemini_init(self, api_key, voice, *, align_fn=None):
+        seen["api_key"] = api_key
+        seen["voice"] = voice
+        self.api_key = api_key
+        self.voice = voice
+
+    def fake_gemini_synth(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def boom_edge(*a, **k):
+        raise AssertionError("EdgeTTS should not run for gemini jobs")
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.__init__", fake_gemini_init
+    )
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.synthesize", fake_gemini_synth
+    )
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", boom_edge
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(
+        s,
+        "clip.mp4",
+        "One line only here.\n",
+        "Kore",
+        tts_provider="gemini",
+    )
+    assert job.tts_provider == "gemini"
+    mgr.run_job(s, job.id)
+    assert seen["api_key"] == "test-key"
+    assert seen["voice"] == "Kore"
+    assert mgr.get(job.id, s).status == "done"
+
+
+def test_create_gemini_requires_api_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        mgr.create(
+            s,
+            "clip.mp4",
+            "Hi.\n",
+            "Kore",
+            tts_provider="gemini",
+        )
+
+
 def test_normalize_mode_maps_roblox_to_single():
     assert hasattr(jobs_module, "normalize_mode")
     assert jobs_module.normalize_mode("roblox") == "single"

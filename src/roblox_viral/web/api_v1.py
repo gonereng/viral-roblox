@@ -16,6 +16,12 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
+from roblox_viral.gemini_tts import (
+    DEFAULT_GEMINI_VOICE,
+    DEFAULT_TTS_PROVIDER,
+    normalize_tts_provider,
+    validate_gemini_voice,
+)
 from roblox_viral.voice import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
@@ -66,6 +72,7 @@ async def create_video(
     pitch: str = Form(""),
     speed: str = Form(""),
     video_speed: str = Form(""),
+    tts_provider: str = Form(""),
     media: UploadFile | None = File(None),
 ) -> dict:
     settings = request.app.state.settings
@@ -103,7 +110,7 @@ async def create_video(
                 detail="Provide media file or source_name",
             )
 
-    voice_s = (voice or "").strip() or DEFAULT_VOICE
+    voice_s = (voice or "").strip()
     try:
         pitch_i = _optional_int(pitch, DEFAULT_PITCH, "pitch")
         speed_i = _optional_int(speed, DEFAULT_SPEED, "speed")
@@ -113,8 +120,15 @@ async def create_video(
         format_edge_pitch(pitch_i)
         format_edge_rate(speed_i)
         validate_video_speed(video_speed_i, mode=mode)
+        provider = normalize_tts_provider(tts_provider or DEFAULT_TTS_PROVIDER)
+        if provider == "gemini":
+            voice_s = validate_gemini_voice(voice_s or DEFAULT_GEMINI_VOICE)
+        else:
+            voice_s = voice_s or DEFAULT_VOICE
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc)
+        status = 503 if "GEMINI_API_KEY" in detail else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
 
     ephemeral = False
     input_bytes: bytes | None = None
@@ -158,11 +172,14 @@ async def create_video(
             mode=mode,
             ken_burns=False,
             ephemeral=ephemeral,
+            tts_provider=provider,
         )
     except BusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, FileNotFoundError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc)
+        status = 503 if "GEMINI_API_KEY" in detail else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
 
     if input_bytes is not None:
         dest = settings.jobs_dir / record.id / record.source_name

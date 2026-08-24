@@ -239,7 +239,17 @@ button:disabled {
   border-radius: 0.4rem;
 }
 
-.slider-field input[type="range"] {
+.tts-provider {
+  display: flex;
+  gap: 1rem;
+  margin: 0.75rem 0 0.35rem;
+}
+.tts-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+}
   width: 100%;
   display: block;
   margin-top: 0.35rem;

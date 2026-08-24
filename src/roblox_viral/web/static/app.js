@@ -47,6 +47,43 @@
   const videoSpeedValue = document.getElementById("video-speed-value");
   const videoSpeedBounds = document.getElementById("video-speed-bounds");
   const videoSpeedField = document.getElementById("video-speed-field");
+  const voiceSelect = document.getElementById("voice");
+  const edgeVoiceControls = document.getElementById("edge-voice-controls");
+  const ttsRadios = [...form.querySelectorAll('input[name="tts_provider"]')];
+
+  function currentTtsProvider() {
+    const checked = ttsRadios.find((r) => r.checked);
+    return checked ? checked.value : "edge";
+  }
+
+  function syncTtsProviderUi() {
+    const provider = currentTtsProvider();
+    if (edgeVoiceControls) edgeVoiceControls.hidden = provider === "gemini";
+    if (!voiceSelect) return;
+    const options = [...voiceSelect.querySelectorAll("option")];
+    let selected = null;
+    for (const opt of options) {
+      const match = (opt.dataset.provider || "edge") === provider;
+      opt.hidden = !match;
+      opt.disabled = !match;
+      if (match && !selected) selected = opt;
+      if (match && provider === "gemini" && opt.dataset.geminiDefault === "1") {
+        selected = opt;
+      }
+      if (
+        match &&
+        provider === "edge" &&
+        opt.value === voiceSelect.dataset.defaultEdge
+      ) {
+        selected = opt;
+      }
+    }
+    if (selected) voiceSelect.value = selected.value;
+  }
+  for (const radio of ttsRadios) {
+    radio.addEventListener("change", syncTtsProviderUi);
+  }
+  syncTtsProviderUi();
 
   function formatPitchLabel(n) {
     const v = Number(n);
@@ -200,10 +237,10 @@
         downloadCard.removeAttribute("download");
       }
     }
-    prependRecentOutput(outputName);
+    prependRecentOutput(outputName, titleCardName);
   }
 
-  function prependRecentOutput(outputName) {
+  function prependRecentOutput(outputName, titleCardName) {
     const section = document.querySelector(".recent-outputs");
     if (!section) return;
     let list = section.querySelector("ul.source-list");
@@ -230,6 +267,13 @@
     link.href = `/media/outputs/${encodeURIComponent(outputName)}`;
     link.textContent = "Play / download";
     li.append(nameSpan, meta, link);
+    if (titleCardName) {
+      const cardLink = document.createElement("a");
+      cardLink.href = `/media/outputs/${encodeURIComponent(titleCardName)}`;
+      cardLink.download = titleCardName;
+      cardLink.textContent = "Download title card";
+      li.append(cardLink);
+    }
     list.prepend(li);
   }
 
@@ -274,6 +318,7 @@
             : "",
       story: document.getElementById("story").value,
       voice: document.getElementById("voice").value,
+      tts_provider: currentTtsProvider(),
       pitch: Number(document.getElementById("pitch").value),
       speed: Number(document.getElementById("speed").value),
       video_speed: Number(document.getElementById("video_speed").value),

@@ -172,6 +172,48 @@ def test_create_resolves_source_video(tmp_path, monkeypatch):
     assert r.status_code == 200
 
 
+def test_create_accepts_tts_provider_gemini(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    monkeypatch.setattr(JobManager, "run_job", lambda *a, **k: None)
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "Kore",
+            "story": "Hi.\n",
+            "type": "single",
+            "source_name": "clip.mp4",
+            "tts_provider": "gemini",
+        },
+    )
+    assert r.status_code == 200
+    st = c.get(f"/api/v1/videos/{r.json()['id']}", headers=_headers())
+    assert st.json()["tts_provider"] == "gemini"
+    assert st.json()["voice"] == "Kore"
+
+
+def test_create_gemini_without_api_key_503(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    r = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "Kore",
+            "story": "Hi.\n",
+            "type": "single",
+            "source_name": "clip.mp4",
+            "tts_provider": "gemini",
+        },
+    )
+    assert r.status_code == 503
+
+
 def test_create_accepts_reddit_video_speed_500(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     settings = c.app.state.settings
