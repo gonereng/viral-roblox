@@ -6,9 +6,11 @@ from roblox_viral.reddit_clips import ClipSegment
 from roblox_viral.render import (
     RenderError,
     _playback_setpts,
+    build_atempo_filters,
     build_reddit_background,
     render_still,
     render_video,
+    tempo_finished_video,
 )
 
 
@@ -531,6 +533,133 @@ def test_build_reddit_background_concats_trimmed_segments(tmp_path, monkeypatch)
     assert cmd[cmd.index("-map") + 1] == "[outv]"
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
     assert "-an" in cmd
+
+
+def test_build_atempo_filters_100_empty():
+    assert build_atempo_filters(100) == []
+
+
+def test_build_atempo_filters_200_single():
+    assert build_atempo_filters(200) == ["atempo=2.0"]
+
+
+def test_build_atempo_filters_50_single():
+    assert build_atempo_filters(50) == ["atempo=0.5"]
+
+
+def test_build_atempo_filters_500_chained():
+    # 5.0 = 2.0 * 2.0 * 1.25
+    assert build_atempo_filters(500) == ["atempo=2.0", "atempo=2.0", "atempo=1.25"]
+
+
+def test_build_atempo_filters_150():
+    assert build_atempo_filters(150) == ["atempo=1.5"]
+
+
+def test_tempo_finished_video_100_copies_without_ffmpeg(tmp_path, monkeypatch):
+    src = _touch(tmp_path / "in.mp4", b"one-x")
+    out = tmp_path / "out.mp4"
+
+    def boom(*a, **k):
+        raise AssertionError("ffmpeg must not run at 100%")
+
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", boom)
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", boom)
+
+    result = tempo_finished_video(
+        input_path=src, output_path=out, video_speed=100, mode="single"
+    )
+    assert result == out
+    assert out.read_bytes() == b"one-x"
+
+
+def test_tempo_finished_video_200_uses_setpts_and_atempo(tmp_path, monkeypatch):
+    src = _touch(tmp_path / "in.mp4", b"one-x")
+    out = tmp_path / "out.mp4"
+    seen = {}
+
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        seen["cmd"] = cmd
+        out.write_bytes(b"sped")
+
+        class R:
+            returncode = 0
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+
+    tempo_finished_video(
+        input_path=src, output_path=out, video_speed=200, mode="single"
+    )
+    cmd = seen["cmd"]
+    assert cmd[0] == "ffmpeg"
+    assert "-filter_complex" in cmd
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    assert "setpts=100/200*PTS" in fc
+    assert "atempo=2.0" in fc
+    assert "-c:v" in cmd and "libx264" in cmd
+    assert "-c:a" in cmd and "aac" in cmd
+    assert str(out) == cmd[-1]
+    assert out.read_bytes() == b"sped"
+
+
+def test_tempo_finished_video_reddit_500(tmp_path, monkeypatch):
+    src = _touch(tmp_path / "in.mp4", b"x")
+    out = tmp_path / "out.mp4"
+    seen = {}
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        seen["cmd"] = cmd
+        out.write_bytes(b"ok")
+
+        class R:
+            returncode = 0
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+    tempo_finished_video(
+        input_path=src, output_path=out, video_speed=500, mode="reddit"
+    )
+    fc = seen["cmd"][seen["cmd"].index("-filter_complex") + 1]
+    assert "setpts=100/500*PTS" in fc
+    assert fc.count("atempo=") == 3
+
+
+def test_tempo_finished_video_rejects_bad_speed(tmp_path):
+    src = _touch(tmp_path / "in.mp4", b"x")
+    with pytest.raises(ValueError, match="video_speed"):
+        tempo_finished_video(
+            input_path=src,
+            output_path=tmp_path / "out.mp4",
+            video_speed=10,
+            mode="single",
+        )
+
+
+def test_tempo_finished_video_ffmpeg_failure_raises(tmp_path, monkeypatch):
+    src = _touch(tmp_path / "in.mp4", b"x")
+    out = tmp_path / "out.mp4"
+    monkeypatch.setattr("roblox_viral.render.require_ffmpeg", lambda: "ffmpeg")
+
+    def fake_run(cmd, check=False, capture_output=True, text=True):
+        class R:
+            returncode = 1
+            stderr = "boom"
+
+        return R()
+
+    monkeypatch.setattr("roblox_viral.render.subprocess.run", fake_run)
+    with pytest.raises(RenderError, match="tempo"):
+        tempo_finished_video(
+            input_path=src, output_path=out, video_speed=150, mode="single"
+        )
 
 
 def test_build_reddit_background_raises_render_error_on_ffmpeg_failure(

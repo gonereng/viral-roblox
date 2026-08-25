@@ -160,6 +160,92 @@ def _playback_setpts(video_speed: int, *, mode: str = "single") -> str | None:
     return f"setpts=100/{video_speed}*PTS"
 
 
+def build_atempo_filters(speed_percent: int) -> list[str]:
+    """Split playback factor into ffmpeg atempo values in [0.5, 2.0]."""
+    if not isinstance(speed_percent, int) or isinstance(speed_percent, bool):
+        raise ValueError("video_speed must be an int")
+    if speed_percent <= 0:
+        raise ValueError("video_speed must be positive")
+    factor = speed_percent / 100.0
+    if abs(factor - 1.0) < 1e-9:
+        return []
+    filters: list[str] = []
+    remaining = factor
+    while remaining > 2.0 + 1e-9:
+        filters.append("atempo=2.0")
+        remaining /= 2.0
+    while remaining < 0.5 - 1e-9:
+        filters.append("atempo=0.5")
+        remaining /= 0.5
+    # remaining now in [0.5, 2.0]
+    if abs(remaining - 1.0) > 1e-9:
+        if abs(remaining - 2.0) < 1e-9:
+            filters.append("atempo=2.0")
+        else:
+            filters.append(f"atempo={remaining:.10g}")
+    return filters
+
+
+def tempo_finished_video(
+    *,
+    input_path: Path | str,
+    output_path: Path | str,
+    video_speed: int,
+    mode: str = "single",
+) -> Path:
+    """Speed up/slow down a finished vertical MP4 (video + audio, pitch preserved)."""
+    validate_video_speed(video_speed, mode=mode)
+    src = Path(input_path)
+    out = Path(output_path)
+    if not src.is_file():
+        raise RenderError(f"Video not found: {src}")
+
+    if video_speed == 100:
+        if src.resolve() != out.resolve():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, out)
+        return out
+
+    ffmpeg = require_ffmpeg()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    setpts = f"setpts=100/{video_speed}*PTS"
+    atempo = build_atempo_filters(video_speed)
+    audio_chain = ",".join(atempo) if atempo else "anull"
+    filter_complex = f"[0:v]{setpts}[v];[0:a]{audio_chain}[a]"
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(src),
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "18",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RenderError(
+            "ffmpeg tempo finished video failed:\n"
+            + (result.stderr or result.stdout or "")
+        )
+    return out
+
+
 def render_video(
     *,
     video_path: Path | str,
