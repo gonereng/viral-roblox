@@ -1,119 +1,174 @@
-### Task 2: Reddit jobs use hook cover instead of 2× screenshot
+### Task 2: Settings, jobs, Docker, README
 
 **Files:**
-- Modify: `src/roblox_viral/web/jobs.py`
-- Modify: `tests/web/test_jobs.py`
+- Modify: `src/roblox_viral/web/config.py`, `src/roblox_viral/web/jobs.py`, `docker-compose.yml`, `README.md`
+- Test: `tests/web/test_config.py`, `tests/web/test_jobs.py`
 
-**Interfaces:**
-- Consumes: `split_hook`, `render_hook_cover` from Task 1
-- Produces: Reddit `create` calls `split_hook(sentences[0])`; `run_job` writes cover via `render_hook_cover` to `outputs/{stem}-card.png`; overlay still `render_reddit_card(..., scale=1.0)` only (no second call at scale 2.0)
+**Consumes:** Task 1 provider kwargs `align_language`, `align_model`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write failing Settings + jobs tests**
 
-Append to `tests/web/test_jobs.py`:
+Add to `tests/web/test_config.py`:
 
 ```python
-def test_create_reddit_rejects_hook_without_dash(tmp_path, monkeypatch):
+def test_whisper_align_defaults(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+    monkeypatch.setenv("APP_PASSWORD", "secret")
+    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+    monkeypatch.delenv("WHISPER_ALIGN_LANGUAGE", raising=False)
+    monkeypatch.delenv("WHISPER_ALIGN_MODEL", raising=False)
+    settings = Settings.from_env()
+    assert settings.whisper_align_language == "de"
+    assert settings.whisper_align_model == "base"
+
+
+def test_whisper_align_from_env(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+    monkeypatch.setenv("APP_PASSWORD", "secret")
+    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+    monkeypatch.setenv("WHISPER_ALIGN_LANGUAGE", "en")
+    monkeypatch.setenv("WHISPER_ALIGN_MODEL", "small")
+    settings = Settings.from_env()
+    assert settings.whisper_align_language == "en"
+    assert settings.whisper_align_model == "small"
+```
+
+Add to `tests/web/test_jobs.py` (mirror existing gemini job test pattern; set env language/model on settings via monkeypatch before `_settings`):
+
+```python
+def test_run_job_gemini_passes_align_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("WHISPER_ALIGN_LANGUAGE", "en")
+    monkeypatch.setenv("WHISPER_ALIGN_MODEL", "small")
     s = _settings(tmp_path, monkeypatch)
-    (s.videos_dir / "one.mp4").write_bytes(b"vid")
     mgr = JobManager()
-    with pytest.raises(ValueError, match="phrase - phrase"):
-        mgr.create(s, "", "Hello world.\nSecond.\n", "en-US-EmmaNeural", mode="reddit")
-```
+    seen = {}
 
-In `test_run_reddit_passes_title_card_and_no_greenscreen`:
+    def fake_gemini_init(self, api_key, voice, *, align_fn=None, align_language="de", align_model="base"):
+        seen["align_language"] = align_language
+        seen["align_model"] = align_model
+        self.api_key = api_key
+        self.voice = voice
+        self._align_fn = align_fn
 
-- Change `story` to `"First sentence here - Second hook.\nSecond line.\n"`
-- After fakes, add:
+    def fake_gemini_synth(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
 
-```python
-    def fake_render_hook_cover(top, bottom, output_path, *, template_path=None):
-        seen.setdefault("covers", []).append((top, bottom, Path(output_path)))
-        Path(output_path).write_bytes(b"hook-png")
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
 
-    monkeypatch.setattr(
-        jobs_module, "render_hook_cover", fake_render_hook_cover, raising=False
-    )
-```
-
-- Change assertions: `seen["cards"]` has **length 1**, scale `1.0`, title `"First sentence here - Second hook."`
-- Assert `seen["covers"][0][0] == "First sentence here"`
-- Assert `seen["covers"][0][1] == "Second hook."`
-- Assert `str(seen["covers"][0][2]).endswith("-card.png")`
-- Remove `assert seen["cards"][1][2] == 2.0`
-
-In `test_run_reddit_copies_title_card_to_outputs`:
-
-- Story: `"One line only here - Bottom phrase.\n"`
-- Replace reliance on `fake_render_reddit_card` writing the **outputs** file. Keep overlay fake; add:
-
-```python
-    def fake_render_hook_cover(top, bottom, output_path, *, template_path=None):
-        Path(output_path).write_bytes(b"hook-png")
+    def fake_render_video(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
 
     monkeypatch.setattr(
-        jobs_module, "render_hook_cover", fake_render_hook_cover, raising=False
+        "roblox_viral.web.jobs.GeminiTTSProvider.__init__", fake_gemini_init
     )
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.synthesize", fake_gemini_synth
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(
+        s, "clip.mp4", "One line only here.\n", "Kore", tts_provider="gemini"
+    )
+    mgr.run_job(s, job.id)
+    assert seen["align_language"] == "en"
+    assert seen["align_model"] == "small"
+    assert mgr.get(job.id, s).status == "done"
 ```
 
-- Assert `card_path.read_bytes() == b"hook-png"` (not `b"png-card"`)
+Note: `_settings` must pick up env via `Settings.from_env()` — if it caches `get_settings`, clear cache or construct Settings the same way other tests do after setenv.
 
-Update **every** `mgr.create(..., mode="reddit")` story in this file so the first line has exactly one `-` (existing tests will 400 otherwise), e.g. `"Hello - world.\n"`, `"One line only - here.\n"`. Search `mode="reddit"` and fix each story.
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `python -m pytest tests/web/test_jobs.py -k reddit -v`
-
-Expected: new reject test FAIL (create succeeds) and/or 2× card assertions still expecting two `render_reddit_card` calls.
-
-- [ ] **Step 3: Wire jobs**
-
-In `src/roblox_viral/web/jobs.py`:
-
-1. Import:
-
-```python
-from roblox_viral.hook_cover import render_hook_cover, split_hook
-```
-
-2. In `create`, after `if not sentences: raise ValueError("Story is empty")`:
-
-```python
-        if mode == "reddit":
-            split_hook(sentences[0])
-```
-
-3. Replace the block that calls `render_reddit_card` twice. Keep 1× overlay; write cover with `render_hook_cover`:
-
-```python
-            if record.mode == "reddit":
-                title_card_until_s = first_sentence_end_s(sentences, words)
-                title_card_path = job_dir / "reddit_card.png"
-                render_reddit_card(sentences[0], title_card_path, scale=1.0)
-                top, bottom = split_hook(sentences[0])
-                title_card_download_name = f"{Path(output_name).stem}-card.png"
-                settings.outputs_dir.mkdir(parents=True, exist_ok=True)
-                render_hook_cover(
-                    top,
-                    bottom,
-                    settings.outputs_dir / title_card_download_name,
-                )
-```
-
-Do not call `render_reddit_card(..., scale=2.0)`.
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `python -m pytest tests/web/test_jobs.py tests/test_hook_cover.py -v`
-
-Expected: PASS
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 2: Run new tests — expect fail**
 
 ```bash
-git add src/roblox_viral/web/jobs.py tests/web/test_jobs.py
-git commit -m "feat(web): Reddit jobs write hook cover instead of 2x screenshot"
+pytest tests/web/test_config.py::test_whisper_align_defaults tests/web/test_jobs.py::test_run_job_gemini_passes_align_settings -v
+```
+
+Expected: FAIL (missing Settings fields / kwargs)
+
+- [ ] **Step 3: Implement Settings + jobs**
+
+`config.py` — add fields with defaults so existing `Settings(...)` call sites keep working:
+
+```python
+whisper_align_language: str = "de"
+whisper_align_model: str = "base"
+```
+
+In `from_env`:
+
+```python
+whisper_align_language=(
+    os.environ.get("WHISPER_ALIGN_LANGUAGE", "de").strip() or "de"
+),
+whisper_align_model=(
+    os.environ.get("WHISPER_ALIGN_MODEL", "base").strip() or "base"
+),
+```
+
+`jobs.py`:
+
+```python
+words = GeminiTTSProvider(
+    settings.gemini_api_key,
+    record.voice,
+    align_language=settings.whisper_align_language,
+    align_model=settings.whisper_align_model,
+).synthesize(tts_text, narration_path)
+```
+
+Update any existing `fake_gemini_init` in `test_jobs.py` that must accept the new kwargs (add `**kwargs` or explicit defaults) so older tests don’t break.
+
+- [ ] **Step 4: Docker + README**
+
+`docker-compose.yml` environment:
+
+```yaml
+GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+WHISPER_ALIGN_LANGUAGE: ${WHISPER_ALIGN_LANGUAGE:-de}
+WHISPER_ALIGN_MODEL: ${WHISPER_ALIGN_MODEL:-base}
+HF_HOME: /app/media/.cache/huggingface
+```
+
+(`./media` volume already persists `/app/media/.cache/...`.)
+
+README optional env table — add rows for `WHISPER_ALIGN_LANGUAGE`, `WHISPER_ALIGN_MODEL`; note Gemini karaoke uses stable-ts force-align (default language German). Mention first Gemini job may download the Whisper model into `media/.cache/`.
+
+- [ ] **Step 5: Run covering + full suite**
+
+```bash
+pytest tests/test_gemini_tts.py tests/web/test_config.py tests/web/test_jobs.py -q
+pytest -q
+```
+
+Expected: all PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/roblox_viral/web/config.py src/roblox_viral/web/jobs.py docker-compose.yml README.md tests/web/test_config.py tests/web/test_jobs.py
+git commit -m "feat(web): wire whisper align language/model settings"
 ```
 
 ---
 
+## Spec coverage
+
+| Spec | Task |
+|------|------|
+| stable-ts force-align | 1 |
+| Defaults de / base | 1 + 2 |
+| Settings env vars | 2 |
+| jobs pass settings | 2 |
+| Docker HF cache + env | 2 |
+| README | 2 |
+| Mocked tests | 1 + 2 |
+
+## Self-review
+
+- No TBD steps; `align_fn` two-arg contract preserved for mocks
+- Word accessor fallback documented if `all_words` missing
+- Existing `Settings(...)` constructors remain valid via field defaults

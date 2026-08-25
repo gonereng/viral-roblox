@@ -1,4 +1,4 @@
-# Task 2 Report: Wire Gemini Pass 1 / Pass 2 in `jobs.py`
+# Task 2 Report: Settings, jobs, Docker, README for Gemini force-align
 
 ## Status
 
@@ -6,111 +6,70 @@
 
 ## Summary
 
-Gemini TTS jobs now force Pass 1 render/plan at `video_speed=100`, then call `tempo_finished_video` from Task 1 when `record.video_speed != 100`. Edge TTS behavior is unchanged. Implemented TDD per the task brief.
+Wired `WHISPER_ALIGN_LANGUAGE` / `WHISPER_ALIGN_MODEL` through `Settings.from_env()` into `JobManager.run_job` Gemini TTS construction. Updated Docker env + `HF_HOME` cache path and README. TDD per brief; no align logic changes.
 
 ## Changes
 
+### `src/roblox_viral/web/config.py`
+
+- Added `whisper_align_language: str = "de"` and `whisper_align_model: str = "base"` with field defaults.
+- `from_env` reads `WHISPER_ALIGN_LANGUAGE` / `WHISPER_ALIGN_MODEL` with strip-or-fallback.
+
 ### `src/roblox_viral/web/jobs.py`
 
-- Imported `tempo_finished_video` from `roblox_viral.render`.
-- Before media planning/render, compute `render_video_speed` (100 for Gemini, else configured speed).
-- Use `render_video_speed` in `plan_reddit_sentence_clips` and `render_video`.
-- When Gemini + speed ≠ 100, Pass 1 writes to `job_dir/render_1x.mp4`; otherwise writes directly to final output.
-- After successful Pass 1, call `tempo_finished_video` with configured speed and mode, then delete `render_1x.mp4`.
-- Picture mode uses the same `pass1_path` / `needs_tempo` logic via `render_still`.
+- Passes `align_language=settings.whisper_align_language` and `align_model=settings.whisper_align_model` to `GeminiTTSProvider`.
 
-### `tests/web/test_jobs.py`
+### `docker-compose.yml`
 
-Added 4 tests:
+- Added `WHISPER_ALIGN_LANGUAGE`, `WHISPER_ALIGN_MODEL`, `HF_HOME: /app/media/.cache/huggingface`.
 
-- `test_run_job_gemini_forces_render_video_speed_100` — Pass 1 at 100, no tempo
-- `test_run_job_gemini_tempos_when_video_speed_not_100` — render_1x → tempo → final, cleanup
-- `test_run_job_edge_still_passes_configured_video_speed` — Edge regression
-- `test_run_job_gemini_reddit_plans_at_100_then_tempos` — plan/render at 100, tempo at 200 with mode=reddit
+### `README.md`
 
-Reddit test adapted hook story to `"One line only - here.\n"` (existing reddit tests require dash in hook).
+- Documented whisper align env vars, stable-ts force-align note for Gemini karaoke, first-run model download into `media/.cache/huggingface`.
+
+### Tests
+
+- `tests/web/test_config.py`: `test_whisper_align_defaults`, `test_whisper_align_from_env`
+- `tests/web/test_jobs.py`: `test_run_job_gemini_passes_align_settings`; updated `fake_gemini_init` in `test_run_job_gemini_uses_gemini_provider`
 
 ## TDD Steps Executed
 
 | Step | Action | Result |
 |------|--------|--------|
-| 1 | Added 4 failing job tests | Tests written (would fail pre-implementation) |
-| 2 | Implemented jobs wiring | 5/5 focused tests PASS |
-| 3 | Full regression | **236/236 PASS** |
+| 1 | Added failing tests | RED — missing Settings fields; align defaults not passed |
+| 2 | Ran focused tests | 3 failed (expected) |
+| 3 | Implemented Settings + jobs + Docker + README | — |
+| 4 | Covering suite | **54/54 PASS** |
+| 5 | Full suite | **245/245 PASS** |
+| 6 | Commit | `4537150 feat(web): wire whisper align language/model settings` |
 
 ## Commit
 
 ```
-7fc360f feat(jobs): Gemini video_speed via post-render tempo
+4537150 feat(web): wire whisper align language/model settings
 ```
 
-Files committed: `src/roblox_viral/web/jobs.py`, `tests/web/test_jobs.py`
+Files committed: `config.py`, `jobs.py`, `docker-compose.yml`, `README.md`, `test_config.py`, `test_jobs.py`
 
 ## Self-Review
 
-### Spec coverage
-
-| Requirement | Status |
-|-------------|--------|
-| Gemini-only post tempo | ✓ `needs_tempo` gated on `tts_provider == "gemini"` |
-| Pass 1 forced `video_speed=100` | ✓ `render_video_speed` |
-| Skip Pass 2 at 100% | ✓ no `tempo_finished_video` call |
-| Edge unchanged | ✓ regression test passes |
-| Delete `render_1x` on success | ✓ `pass1_path.unlink(missing_ok=True)` |
-| Reddit plan at 100, tempo at configured | ✓ reddit test |
-| No new job status / no UI | ✓ unchanged |
-
-### Correctness
-
-- `output_name` still points at final (sped) file.
-- No status change between passes.
-- `tempo_finished_video` receives `mode=record.mode` for reddit vs single validation.
-
-### Minor adaptation
-
-- Reddit test story uses hook-with-dash per existing `test_run_job_reddit_*` convention (brief's plain story would fail `split_hook` validation at create).
+| Spec | Status |
+|------|--------|
+| Settings env vars | ✓ |
+| jobs pass settings | ✓ |
+| Docker HF cache + env | ✓ |
+| README | ✓ |
+| Existing Settings(...) valid | ✓ field defaults |
+| align_fn two-arg contract | ✓ unchanged |
+| No align logic rework | ✓ |
 
 ## Test Results
 
 ```
-pytest tests/web/test_jobs.py::test_run_job_gemini_* ... test_run_job_passes_video_speed_to_render -v  → 5 passed
-pytest -q                                                                                                 → 236 passed
+pytest tests/test_gemini_tts.py tests/web/test_config.py tests/web/test_jobs.py -q  → 54 passed
+pytest -q                                                                           → 245 passed
 ```
 
 ## Concerns
 
-None blocking.
-
----
-
-## Final-review fix: Picture `video_speed` coercion (option 3)
-
-**Status:** DONE
-
-**Decision:** Force `video_speed=100` at job **create** for all providers when `mode == "picture"`. Generate may still post a stale slider value; stored job always uses 100. `run_job` also skips Pass 2 tempo for picture even on legacy records.
-
-### Changes
-
-- `JobManager.create`: after `normalize_mode`, picture → `video_speed = DEFAULT_VIDEO_SPEED`; else `validate_video_speed`.
-- `run_job`: `needs_tempo` excludes picture (`record.mode != "picture"`).
-
-### Tests added
-
-- `test_create_picture_forces_video_speed_100` — Edge picture + 175 → stored 100
-- `test_create_picture_gemini_forces_video_speed_100` — Gemini picture + 160 → stored 100
-- `test_run_job_gemini_picture_skips_tempo` — legacy `video_speed=175` on record; no `tempo_finished_video`; `render_still` writes final output
-
-### Test evidence
-
-```
-pytest tests/web/test_jobs.py::test_create_picture_forces_video_speed_100 \
-     tests/web/test_jobs.py::test_create_picture_gemini_forces_video_speed_100 \
-     tests/web/test_jobs.py::test_run_job_gemini_picture_skips_tempo \
-     tests/web/test_jobs.py::test_run_job_gemini_* \
-     tests/web/test_jobs.py::test_run_picture_job_calls_render_still -v  → 8 passed
-pytest -q                                                                 → 239 passed
-```
-
-### Commit
-
-`fix(jobs): force picture video_speed to 100 at create` (see git log on branch)
+None blocking. First Gemini job in Docker downloads Whisper model (~150MB) into persisted `./media/.cache/huggingface`.

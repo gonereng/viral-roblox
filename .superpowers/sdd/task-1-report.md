@@ -1,173 +1,80 @@
-# Task 1 Report: `split_hook` + `render_hook_cover` + template asset
+# Task 1 Report: stable-ts force-align in `gemini_tts`
 
-## Status: DONE
+## Status
+
+**DONE**
 
 ## Summary
 
-Implemented Reddit hook cover stamping: `split_hook` parses `"phrase - phrase"` lines, `render_hook_cover` draws top/bottom text into fixed boxes on a template PNG, and the packaged Gemini Snoo asset was copied to `src/roblox_viral/assets/hook_card.png`.
+Replaced faster-whisper free transcription with stable-ts `model.align()` for Gemini karaoke word timings. Added `DEFAULT_ALIGN_LANGUAGE` / `DEFAULT_ALIGN_MODEL`, configurable `align_language` / `align_model` on `GeminiTTSProvider`, and preserved two-arg `align_fn(out, script)` injectability for existing mocks.
 
-## Files Created
+## Changes
 
-| File | Purpose |
-|------|---------|
-| `src/roblox_viral/assets/hook_card.png` | Packaged cover template (104,942 bytes, PNG) |
-| `src/roblox_viral/hook_cover.py` | `split_hook`, `render_hook_cover`, box constants |
-| `tests/test_hook_cover.py` | Unit tests for parsing and rendering |
+### `pyproject.toml`
 
-## TDD Evidence
+- Added `stable-ts>=2.13.3` dependency (kept `faster-whisper>=1.0.0`).
 
-### RED (Step 3)
+### `src/roblox_viral/gemini_tts.py`
 
-```
-python -m pytest tests/test_hook_cover.py -v
-```
+- Imported `stable_whisper`; added `DEFAULT_ALIGN_LANGUAGE = "de"`, `DEFAULT_ALIGN_MODEL = "base"`.
+- Rewrote `align_words_with_whisper` to call `stable_whisper.load_faster_whisper(...).align(...)` with language/model kwargs.
+- Word extraction uses `WhisperResult.all_words()` when available; falls back to flattening `segment.words`.
+- Updated `GeminiTTSProvider.__init__` to accept/store `align_language` and `align_model`; `_align_fn` is optional (None → default align).
+- `synthesize` calls `align_fn(out, script)` when injected; otherwise passes language/model to `align_words_with_whisper`.
 
-```
-ERROR collecting tests/test_hook_cover.py
-ModuleNotFoundError: No module named 'roblox_viral.hook_cover'
-```
+### `tests/test_gemini_tts.py`
 
-Expected failure: module not yet implemented.
+Added 3 tests:
+- `test_align_words_force_uses_stable_ts_align` — mocks stable-ts load/align, asserts WordTiming conversion
+- `test_align_words_raises_when_empty` — RuntimeError when align returns no words
+- `test_provider_passes_language_model_to_default_align` — provider threads align_language/model to default align
 
-### GREEN (Step 5)
+## TDD Steps Executed
 
-```
-python -m pytest tests/test_hook_cover.py -v
-```
-
-```
-9 passed in 0.70s
-```
-
-All tests:
-- `test_split_hook_valid` — trims and splits on single `-`
-- `test_split_hook_rejects_bad_lines` (6 cases) — raises `ValueError` with `"phrase - phrase"`
-- `test_render_hook_cover_paints_both_boxes` — text changes pixels in `BOX_TOP` and `BOX_BOTTOM`
-- `test_render_hook_cover_missing_template_raises` — `FileNotFoundError` with "template"
-
-### Full Suite (pre-commit)
-
-```
-python -m pytest -v
-```
-
-```
-180 passed, 2 skipped in 9.88s
-```
-
-## Self-Review
-
-- **Interfaces match brief verbatim:** `HOOK_ERROR`, `BOX_TOP`, `BOX_BOTTOM`, `BOX_INSET`, `split_hook`, `default_template_path`, `render_hook_cover`.
-- **Dependencies:** Reuses `roblox_viral.reddit_card._font` and `_wrap_text` as specified.
-- **Missing template:** Raises `FileNotFoundError(f"Cover template not found: {template}")` — message contains "template".
-- **Asset:** Copied from Cursor workspace Gemini PNG; confirmed exists at `src/roblox_viral/assets/hook_card.png`.
-- **Package data:** `pyproject.toml` already lists `assets/*` under `roblox_viral` package-data.
-- **Minor note:** Test helper uses deprecated `Image.getdata()` (Pillow 14 warning only; from brief test code, not a regression).
+| Step | Action | Result |
+|------|--------|--------|
+| 1 | Added `stable-ts` dependency | Installed stable-ts 2.19.1 |
+| 2 | Added failing tests | RED — no `stable_whisper` import; unknown `align_language` kwarg |
+| 3 | Ran focused tests | 2 failed (expected) |
+| 4 | Implemented force-align + provider changes | — |
+| 5 | Ran `tests/test_gemini_tts.py` | **7/7 PASS** |
+| 6 | Full suite | **242/242 PASS** |
+| 7 | Commit | `21e53d1 feat(gemini): force-align karaoke with stable-ts` |
 
 ## Commit
 
 ```
-c042136 feat: stamp Reddit hook phrases onto cover template
+21e53d1 feat(gemini): force-align karaoke with stable-ts
 ```
 
-Files committed: `hook_card.png`, `hook_cover.py`, `test_hook_cover.py` only (excluded `docs/` and `.superpowers/sdd/`).
+Files committed: `pyproject.toml`, `src/roblox_viral/gemini_tts.py`, `tests/test_gemini_tts.py`
 
-## Review Fix: `_draw_box` min-font fallback
+## Self-Review
 
-### What changed
+### Correctness
 
-In `_draw_box`, the fallback when no font size fits the box now initializes `lines` from `_wrap_text(text, _MIN_FONT font, inner_w)` instead of `[text]`. Spacing and line height also derive from the min-font metrics. Long hooks that overflow at every tried size still render as a wrapped min-font block (may clip vertically, but never collapse to one unwrapped line).
+- Force-align uses known script text instead of free transcription — fixes karaoke desync root cause.
+- Empty script raises `ValueError("TTS text is empty")` before model load.
+- Gap-filling logic preserved (extend word end to next word start when needed).
+- `align_fn` two-arg contract preserved for `test_gemini_tts_synthesize_mocked` and jobs mocks.
 
-Added `test_render_hook_cover_wraps_long_text_at_min_font`: renders a 30-word hook, asserts min-font wrapping produces multiple lines, and checks painted white pixels span more than one text row in `BOX_TOP`.
+### Scope adherence
 
-### Commit
+- Did not touch `config.py`, `jobs.py`, `docker-compose`, or README (Task 2).
+- Only committed the three task files.
 
-```
-6ae9ca8 fix: wrap long hook text at min font fallback
-```
+### Word accessor
 
-### Tests
+Used `result.all_words()` (stable-ts WhisperResult API); fallback to segment.words documented in one-line comment.
 
-```
-python -m pytest tests/test_hook_cover.py -v
-```
-
-```
-10 passed in 0.57s
-```
-
-Covering test: `test_render_hook_cover_wraps_long_text_at_min_font`
-
-## Re-Review Fix: shrink-to-fit and clip overflow
-
-### What changed
-
-`_draw_box` now shrinks font size from 56px down to 8px until the wrapped block fits `inner_h`, using per-line `textbbox` heights. If still too tall at 8px, excess wrapped lines are dropped from the bottom. Each line is drawn only when its bounding box fits fully inside the inset rectangle (no single unwrapped line fallback).
-
-Replaced `test_render_hook_cover_wraps_long_text_at_min_font` with `test_render_hook_cover_long_text_stays_inside_inset`: 50-word hooks in both boxes must paint text inside the inset and leave margin strips at background color.
-
-### Commit
+## Test Results
 
 ```
-1eec75f fix: shrink and clip hook text to box height
+pytest tests/test_gemini_tts.py::test_align_words_force_uses_stable_ts_align tests/test_gemini_tts.py::test_provider_passes_language_model_to_default_align -v  → 2 passed (after impl)
+pytest tests/test_gemini_tts.py -v  → 7 passed
+pytest -q  → 242 passed
 ```
 
-### Tests
+## Concerns
 
-```
-python -m pytest tests/test_hook_cover.py -v
-```
-
-```
-10 passed in 1.38s
-```
-
-Covering test: `test_render_hook_cover_long_text_stays_inside_inset`
-
-## Re-Review Fix: scale-to-fit (no line dropping)
-
-### What changed
-
-Removed `_trim_lines_to_height` and per-line clipping. `_draw_box` now picks the largest font (56px→8px) whose wrapped block fits the inset; if none fit at 8px, the full wrapped phrase is rasterized onto a transparent layer and scaled down with LANCZOS to fit `inner_w × inner_h`, then pasted centered. All wrapped lines remain visible.
-
-Updated `test_render_hook_cover_long_text_stays_inside_inset` to assert text stays inside inset margins and spans >20px vertically (multi-line block, not a single clipped line).
-
-### Commit
-
-```
-ff4b037 fix: scale long hook text to fit without dropping lines
-```
-
-### Tests
-
-```
-python -m pytest tests/test_hook_cover.py -v
-```
-
-```
-10 passed in 1.57s
-```
-
-Covering test: `test_render_hook_cover_long_text_stays_inside_inset`
-
-## Re-Review Fix: font top offset in `_render_text_block`
-
-### What changed
-
-`_render_text_block` now draws each line at `y - bbox[1]` so glyphs with a positive font top offset are not clipped on the temporary layer. Layer height includes `top_pad = max(bbox[1])` before the alpha tight-crop.
-
-### Commit
-
-```
-1c0aafa fix: account for font top offset in text block raster
-```
-
-### Tests
-
-```
-python -m pytest tests/test_hook_cover.py -v
-```
-
-```
-10 passed in 1.48s
-```
+None blocking. First real Gemini job will download the Whisper base model (~150MB); cache wiring is Task 2.

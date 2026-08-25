@@ -1,225 +1,261 @@
-### Task 1: `split_hook` + `render_hook_cover` + template asset
+### Task 1: stable-ts force-align in `gemini_tts`
 
 **Files:**
-- Create: `src/roblox_viral/assets/hook_card.png`
-- Create: `src/roblox_viral/hook_cover.py`
-- Create: `tests/test_hook_cover.py`
+- Modify: `pyproject.toml`, `src/roblox_viral/gemini_tts.py`
+- Test: `tests/test_gemini_tts.py`
 
-**Interfaces:**
-- Consumes: `roblox_viral.reddit_card._font`, `roblox_viral.reddit_card._wrap_text`
-- Produces:
-  - `HOOK_ERROR = 'First line must be "phrase - phrase"'`
-  - `BOX_TOP = (200, 335, 880, 520)`  # x1, y1, x2, y2
-  - `BOX_BOTTOM = (200, 1400, 880, 1600)`
-  - `BOX_INSET = 16`
-  - `split_hook(line: str) -> tuple[str, str]` — raise `ValueError(HOOK_ERROR)` if not exactly one `-` with two non-empty trimmed sides
-  - `default_template_path() -> Path` — `Path(__file__).resolve().parent / "assets" / "hook_card.png"`
-  - `render_hook_cover(top: str, bottom: str, output_path: Path \| str, *, template_path: Path \| str \| None = None) -> Path`
-  - Missing template → `FileNotFoundError` or `RuntimeError` with "template" in the message
-
-- [ ] **Step 1: Copy the template asset**
-
-Copy the attached Snoo art to `src/roblox_viral/assets/hook_card.png`. Source (Cursor workspace image):
-
-`C:\Users\Roland\.cursor\projects\d-WorkSpace-viral-roblox\assets\c__Users_Roland_AppData_Roaming_Cursor_User_workspaceStorage_b0012328d70214772596edede1362835_images_Gemini_Generated_Image_7ovay57ovay57ova-8c137f28-13df-49f0-909f-4bbbb065b0c7.png`
-
-PowerShell:
-
-```powershell
-Copy-Item -Force "C:\Users\Roland\.cursor\projects\d-WorkSpace-viral-roblox\assets\c__Users_Roland_AppData_Roaming_Cursor_User_workspaceStorage_b0012328d70214772596edede1362835_images_Gemini_Generated_Image_7ovay57ovay57ova-8c137f28-13df-49f0-909f-4bbbb065b0c7.png" "src/roblox_viral/assets/hook_card.png"
-```
-
-If that path is missing, search the repo/`assets` folder for the Gemini PNG and copy it. Confirm `src/roblox_viral/assets/hook_card.png` exists and is a PNG.
-
-- [ ] **Step 2: Write failing tests**
-
-Create `tests/test_hook_cover.py`:
-
+**Produces:**
 ```python
-from pathlib import Path
+DEFAULT_ALIGN_LANGUAGE = "de"
+DEFAULT_ALIGN_MODEL = "base"
 
-import pytest
-from PIL import Image, ImageDraw
-
-from roblox_viral.hook_cover import (
-    BOX_BOTTOM,
-    BOX_TOP,
-    HOOK_ERROR,
-    render_hook_cover,
-    split_hook,
-)
-
-
-def test_split_hook_valid():
-    assert split_hook("I found a door - Then it slammed") == (
-        "I found a door",
-        "Then it slammed",
-    )
-    assert split_hook("  A  -  B  ") == ("A", "B")
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
-        "No dash here",
-        "too - many - dashes",
-        " - only bottom",
-        "only top - ",
-        "-",
-        "",
-    ],
-)
-def test_split_hook_rejects_bad_lines(line):
-    with pytest.raises(ValueError, match="phrase - phrase"):
-        split_hook(line)
-
-
-def _blank_template(path: Path) -> Path:
-    img = Image.new("RGBA", (1080, 1920), (10, 10, 10, 255))
-    draw = ImageDraw.Draw(img)
-    for box in (BOX_TOP, BOX_BOTTOM):
-        draw.rectangle(box, fill=(40, 40, 40, 255))
-    img.save(path)
-    return path
-
-
-def _box_pixels(image: Image.Image, box: tuple[int, int, int, int]) -> list:
-    x1, y1, x2, y2 = box
-    crop = image.crop((x1, y1, x2, y2))
-    return list(crop.getdata())
-
-
-def test_render_hook_cover_paints_both_boxes(tmp_path):
-    template = _blank_template(tmp_path / "tpl.png")
-    out = tmp_path / "cover.png"
-    render_hook_cover("Hello world", "Second phrase", out, template_path=template)
-    assert out.is_file()
-    with Image.open(template) as blank, Image.open(out) as painted:
-        assert painted.size == (1080, 1920)
-        assert _box_pixels(painted, BOX_TOP) != _box_pixels(blank, BOX_TOP)
-        assert _box_pixels(painted, BOX_BOTTOM) != _box_pixels(blank, BOX_BOTTOM)
-
-
-def test_render_hook_cover_missing_template_raises(tmp_path):
-    with pytest.raises((FileNotFoundError, RuntimeError), match="[Tt]emplate"):
-        render_hook_cover(
-            "A",
-            "B",
-            tmp_path / "out.png",
-            template_path=tmp_path / "missing.png",
-        )
-```
-
-- [ ] **Step 3: Run tests to verify they fail**
-
-Run: `python -m pytest tests/test_hook_cover.py -v`
-
-Expected: FAIL (`ModuleNotFoundError` / `hook_cover` not defined).
-
-- [ ] **Step 4: Implement `hook_cover.py`**
-
-Create `src/roblox_viral/hook_cover.py`:
-
-```python
-"""Stamp hook phrases onto the packaged Reddit cover template."""
-
-from __future__ import annotations
-
-from pathlib import Path
-
-from PIL import Image, ImageDraw
-
-from roblox_viral.reddit_card import _font, _wrap_text
-
-HOOK_ERROR = 'First line must be "phrase - phrase"'
-BOX_TOP = (200, 335, 880, 520)
-BOX_BOTTOM = (200, 1400, 880, 1600)
-BOX_INSET = 16
-_MAX_FONT = 56
-_MIN_FONT = 16
-
-
-def default_template_path() -> Path:
-    return Path(__file__).resolve().parent / "assets" / "hook_card.png"
-
-
-def split_hook(line: str) -> tuple[str, str]:
-    text = line or ""
-    if text.count("-") != 1:
-        raise ValueError(HOOK_ERROR)
-    left, right = text.split("-", 1)
-    top, bottom = left.strip(), right.strip()
-    if not top or not bottom:
-        raise ValueError(HOOK_ERROR)
-    return top, bottom
-
-
-def _draw_box(
-    draw: ImageDraw.ImageDraw,
+def align_words_with_whisper(
+    audio_path: Path,
     text: str,
-    box: tuple[int, int, int, int],
-) -> None:
-    x1, y1, x2, y2 = box
-    inner_w = (x2 - x1) - 2 * BOX_INSET
-    inner_h = (y2 - y1) - 2 * BOX_INSET
-    font = _font(_MIN_FONT, bold=True)
-    lines = [text]
-    spacing = 4
-    line_h = _MIN_FONT
-    for size in range(_MAX_FONT, _MIN_FONT - 1, -2):
-        candidate = _font(size, bold=True)
-        wrapped = _wrap_text(text, candidate, inner_w)
-        bbox = candidate.getbbox("Ag")
-        lh = bbox[3] - bbox[1]
-        sp = max(4, size // 8)
-        block_h = len(wrapped) * lh + max(0, len(wrapped) - 1) * sp
-        if block_h <= inner_h:
-            font = candidate
-            lines = wrapped
-            spacing = sp
-            line_h = lh
-            break
-    block_h = len(lines) * line_h + max(0, len(lines) - 1) * spacing
-    y = y1 + BOX_INSET + max(0, (inner_h - block_h) / 2)
-    for line in lines:
-        w = draw.textlength(line, font=font)
-        x = x1 + BOX_INSET + max(0, (inner_w - w) / 2)
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-        y += line_h + spacing
-
-
-def render_hook_cover(
-    top: str,
-    bottom: str,
-    output_path: Path | str,
     *,
-    template_path: Path | str | None = None,
-) -> Path:
-    template = Path(template_path) if template_path is not None else default_template_path()
-    if not template.is_file():
-        raise FileNotFoundError(f"Cover template not found: {template}")
-    with Image.open(template) as src:
-        image = src.convert("RGBA")
-    draw = ImageDraw.Draw(image)
-    _draw_box(draw, top, BOX_TOP)
-    _draw_box(draw, bottom, BOX_BOTTOM)
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    image.save(out, format="PNG")
-    return out
+    language: str = DEFAULT_ALIGN_LANGUAGE,
+    model_size: str = DEFAULT_ALIGN_MODEL,
+) -> list[WordTiming]:
+    """Force-align known script to audio via stable-ts + faster-whisper."""
+
+class GeminiTTSProvider:
+    def __init__(
+        self,
+        api_key: str,
+        voice: str = DEFAULT_GEMINI_VOICE,
+        *,
+        align_fn=None,
+        align_language: str = DEFAULT_ALIGN_LANGUAGE,
+        align_model: str = DEFAULT_ALIGN_MODEL,
+    ) -> None: ...
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+When `align_fn` is None, `synthesize` calls `align_words_with_whisper(out, script, language=self.align_language, model_size=self.align_model)`.
+When `align_fn` is provided, keep calling `align_fn(out, script)` (two-arg) so existing mocks still work.
 
-Run: `python -m pytest tests/test_hook_cover.py -v`
+- [ ] **Step 1: Add dependency**
+
+In `pyproject.toml` dependencies, add:
+
+```toml
+"stable-ts>=2.13.3",
+```
+
+Keep `faster-whisper>=1.0.0`. Run `pip install -e ".[dev]"` (or project equivalent) so imports work locally.
+
+- [ ] **Step 2: Write failing tests for force-align**
+
+Add to `tests/test_gemini_tts.py`:
+
+```python
+def test_align_words_force_uses_stable_ts_align(tmp_path, monkeypatch):
+    from roblox_viral.gemini_tts import align_words_with_whisper
+
+    audio = tmp_path / "n.mp3"
+    audio.write_bytes(b"fake")
+    seen = {}
+
+    class FakeWord:
+        def __init__(self, word, start, end):
+            self.word = word
+            self.start = start
+            self.end = end
+
+    class FakeResult:
+        def all_words(self):
+            return [
+                FakeWord("Hallo", 0.0, 0.2),
+                FakeWord("Welt", 0.2, 0.5),
+            ]
+
+    class FakeModel:
+        def align(self, audio_path, text, language=None, **kwargs):
+            seen["audio"] = str(audio_path)
+            seen["text"] = text
+            seen["language"] = language
+            return FakeResult()
+
+    def fake_load(model_size, device="cpu", compute_type="int8", **kwargs):
+        seen["model_size"] = model_size
+        seen["device"] = device
+        seen["compute_type"] = compute_type
+        return FakeModel()
+
+    monkeypatch.setattr(
+        "roblox_viral.gemini_tts.stable_whisper.load_faster_whisper",
+        fake_load,
+    )
+
+    words = align_words_with_whisper(
+        audio, "Hallo Welt", language="de", model_size="base"
+    )
+    assert seen["model_size"] == "base"
+    assert seen["device"] == "cpu"
+    assert seen["compute_type"] == "int8"
+    assert seen["language"] == "de"
+    assert "Hallo Welt" in seen["text"]
+    assert [w.text for w in words] == ["Hallo", "Welt"]
+    assert words[0].start_ms == 0
+    assert words[0].end_ms == 200
+    assert words[1].start_ms == 200
+    assert words[1].end_ms == 500
+
+
+def test_align_words_raises_when_empty(tmp_path, monkeypatch):
+    from roblox_viral.gemini_tts import align_words_with_whisper
+
+    audio = tmp_path / "n.mp3"
+    audio.write_bytes(b"x")
+
+    class FakeResult:
+        def all_words(self):
+            return []
+
+    class FakeModel:
+        def align(self, *a, **k):
+            return FakeResult()
+
+    monkeypatch.setattr(
+        "roblox_viral.gemini_tts.stable_whisper.load_faster_whisper",
+        lambda *a, **k: FakeModel(),
+    )
+    with pytest.raises(RuntimeError, match="align"):
+        align_words_with_whisper(audio, "Hi", language="de")
+
+
+def test_provider_passes_language_model_to_default_align(tmp_path, monkeypatch):
+    pcm = b"\x00\x00" * 2400
+    seen = {}
+
+    monkeypatch.setattr(
+        GeminiTTSProvider,
+        "_generate_pcm",
+        lambda self, text: (pcm, 24000),
+    )
+    monkeypatch.setattr(
+        "roblox_viral.gemini_tts._pcm_to_mp3",
+        lambda data, *, sample_rate, output_mp3: Path(output_mp3).write_bytes(b"mp3"),
+    )
+
+    def fake_align(audio_path, text, *, language, model_size):
+        seen["language"] = language
+        seen["model_size"] = model_size
+        return [WordTiming("Hi", 0, 100)]
+
+    monkeypatch.setattr(
+        "roblox_viral.gemini_tts.align_words_with_whisper", fake_align
+    )
+
+    out = tmp_path / "n.mp3"
+    GeminiTTSProvider(
+        "key", "Kore", align_language="en", align_model="small"
+    ).synthesize("Hi", out)
+    assert seen == {"language": "en", "model_size": "small"}
+```
+
+If stable-ts word iteration is via `result.segments` / nested `.words` rather than `all_words()`, adjust the implementation to match the library API and update the FakeResult accordingly — prefer `all_words()` if present (stable-ts WhisperResult), else iterate segments’ words. Document the chosen accessor in a one-line comment.
+
+- [ ] **Step 3: Run tests — expect fail**
+
+```bash
+pytest tests/test_gemini_tts.py::test_align_words_force_uses_stable_ts_align tests/test_gemini_tts.py::test_provider_passes_language_model_to_default_align -v
+```
+
+Expected: FAIL (no `stable_whisper` import / wrong signature)
+
+- [ ] **Step 4: Implement force-align**
+
+In `gemini_tts.py`:
+
+1. Add:
+
+```python
+import stable_whisper
+
+DEFAULT_ALIGN_LANGUAGE = "de"
+DEFAULT_ALIGN_MODEL = "base"
+```
+
+2. Replace `align_words_with_whisper` body:
+
+```python
+def align_words_with_whisper(
+    audio_path: Path,
+    text: str,
+    *,
+    language: str = DEFAULT_ALIGN_LANGUAGE,
+    model_size: str = DEFAULT_ALIGN_MODEL,
+) -> list[WordTiming]:
+    """Force-align known script to audio via stable-ts + faster-whisper."""
+    script = (text or "").strip()
+    if not script:
+        raise ValueError("TTS text is empty")
+    lang = (language or DEFAULT_ALIGN_LANGUAGE).strip() or DEFAULT_ALIGN_LANGUAGE
+    size = (model_size or DEFAULT_ALIGN_MODEL).strip() or DEFAULT_ALIGN_MODEL
+    model = stable_whisper.load_faster_whisper(
+        size, device="cpu", compute_type="int8"
+    )
+    result = model.align(str(audio_path), script, language=lang)
+    words: list[WordTiming] = []
+    # WhisperResult.all_words() if available; else flatten segment.words
+    raw_words = (
+        result.all_words()
+        if hasattr(result, "all_words")
+        else [
+            w
+            for seg in (result.segments or [])
+            for w in (getattr(seg, "words", None) or [])
+        ]
+    )
+    for word in raw_words:
+        token = (getattr(word, "word", None) or getattr(word, "text", None) or "").strip()
+        if not token:
+            continue
+        start = float(word.start)
+        end = float(word.end)
+        start_ms = max(0, int(round(start * 1000)))
+        end_ms = max(start_ms + 1, int(round(end * 1000)))
+        words.append(WordTiming(text=token, start_ms=start_ms, end_ms=end_ms))
+    if not words:
+        raise RuntimeError("Whisper align returned no words")
+    for i in range(len(words) - 1):
+        if words[i].end_ms < words[i + 1].start_ms:
+            words[i] = WordTiming(
+                text=words[i].text,
+                start_ms=words[i].start_ms,
+                end_ms=words[i + 1].start_ms,
+            )
+    return words
+```
+
+3. Update `GeminiTTSProvider.__init__` to store `align_language` / `align_model`.
+
+4. Update `synthesize` default align call:
+
+```python
+if self._align_fn is not None:
+    return self._align_fn(out, script)
+return align_words_with_whisper(
+    out,
+    script,
+    language=self.align_language,
+    model_size=self.align_model,
+)
+```
+
+- [ ] **Step 5: Run gemini_tts tests — expect PASS**
+
+```bash
+pytest tests/test_gemini_tts.py -v
+```
 
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/roblox_viral/assets/hook_card.png src/roblox_viral/hook_cover.py tests/test_hook_cover.py
-git commit -m "feat: stamp Reddit hook phrases onto cover template"
+git add pyproject.toml src/roblox_viral/gemini_tts.py tests/test_gemini_tts.py
+git commit -m "feat(gemini): force-align karaoke with stable-ts"
 ```
 
 ---
