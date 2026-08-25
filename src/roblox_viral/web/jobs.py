@@ -125,7 +125,10 @@ class JobManager:
         format_edge_pitch(pitch)
         format_edge_rate(speed)
         mode = normalize_mode(mode)
-        validate_video_speed(video_speed, mode=mode)
+        if mode == "picture":
+            video_speed = DEFAULT_VIDEO_SPEED
+        else:
+            validate_video_speed(video_speed, mode=mode)
         provider = normalize_tts_provider(tts_provider)
         if provider == "gemini":
             if not (settings.gemini_api_key or "").strip():
@@ -309,7 +312,9 @@ class JobManager:
                 100 if record.tts_provider == "gemini" else record.video_speed
             )
             needs_tempo = (
-                record.tts_provider == "gemini" and record.video_speed != 100
+                record.tts_provider == "gemini"
+                and record.mode != "picture"
+                and record.video_speed != 100
             )
             pass1_path = (
                 job_dir / "render_1x.mp4" if needs_tempo else output_path

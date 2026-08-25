@@ -223,6 +223,38 @@ def test_create_picture_job_resolves_image(tmp_path, monkeypatch):
     assert job.source_name == "still.jpg"
 
 
+def test_create_picture_forces_video_speed_100(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.images_dir / "still.jpg").write_bytes(b"img")
+    mgr = JobManager()
+    job = mgr.create(
+        s,
+        "still.jpg",
+        "Hello world.\n",
+        "en-US-EmmaNeural",
+        mode="picture",
+        video_speed=175,
+    )
+    assert job.video_speed == 100
+
+
+def test_create_picture_gemini_forces_video_speed_100(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    s = _settings(tmp_path, monkeypatch)
+    (s.images_dir / "still.jpg").write_bytes(b"img")
+    mgr = JobManager()
+    job = mgr.create(
+        s,
+        "still.jpg",
+        "Hello world.\n",
+        "Kore",
+        mode="picture",
+        tts_provider="gemini",
+        video_speed=160,
+    )
+    assert job.video_speed == 100
+
+
 def test_create_picture_rejects_video_name(tmp_path, monkeypatch):
     s = _settings(tmp_path, monkeypatch)
     mgr = JobManager()
@@ -311,6 +343,60 @@ def test_run_picture_job_calls_render_still(tmp_path, monkeypatch):
     assert seen["ken_burns"] is True
     assert "overlay_path" not in seen
     assert Path(seen["image_path"]).name == "still.jpg"
+
+
+def test_run_job_gemini_picture_skips_tempo(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    s = _settings(tmp_path, monkeypatch)
+    (s.images_dir / "still.jpg").write_bytes(b"img")
+    mgr = JobManager()
+    seen = {}
+
+    def fake_gemini_synth(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_still(**kwargs):
+        seen["still"] = kwargs
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    def boom_tempo(**kwargs):
+        raise AssertionError("tempo must not run for picture jobs")
+
+    def boom_video(**kwargs):
+        raise AssertionError("render_video should not run for picture jobs")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.synthesize", fake_gemini_synth
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_still", fake_render_still)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", boom_video)
+    monkeypatch.setattr("roblox_viral.web.jobs.tempo_finished_video", boom_tempo)
+
+    job = mgr.create(
+        s,
+        "still.jpg",
+        "One line only here.\n",
+        "Kore",
+        mode="picture",
+        tts_provider="gemini",
+        video_speed=175,
+    )
+    assert job.video_speed == 100
+    # Simulate legacy record with stale speed before run_job defense
+    job.video_speed = 175
+
+    mgr.run_job(s, job.id)
+    done = mgr.get(job.id, s)
+    assert done.status == "done"
+    assert done.output_name.endswith(".mp4")
+    final = s.outputs_dir / done.output_name
+    assert seen["still"]["output_path"] == final
+    assert final.is_file()
 
 
 def test_create_ephemeral_skips_library(tmp_path, monkeypatch):
