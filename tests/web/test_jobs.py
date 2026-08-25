@@ -889,3 +889,205 @@ def test_run_single_passes_x_card_and_no_greenscreen(tmp_path, monkeypatch):
     assert seen["render"]["title_card_until_s"] == 0.5
     assert mgr.get(job.id, s).status == "done"
     assert mgr.get(job.id, s).title_card_name is None
+
+
+def test_run_job_gemini_forces_render_video_speed_100(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    seen = {}
+
+    def fake_gemini_synth(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        seen["render"] = kwargs
+        Path(kwargs["output_path"]).write_bytes(b"mp4-1x")
+
+    def boom_tempo(**kwargs):
+        raise AssertionError("tempo must not run at video_speed 100")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.synthesize", fake_gemini_synth
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+    monkeypatch.setattr("roblox_viral.web.jobs.tempo_finished_video", boom_tempo)
+
+    job = mgr.create(
+        s,
+        "clip.mp4",
+        "One line only here.\n",
+        "Kore",
+        tts_provider="gemini",
+        video_speed=100,
+    )
+    mgr.run_job(s, job.id)
+    assert seen["render"]["video_speed"] == 100
+    assert mgr.get(job.id, s).status == "done"
+    assert (s.outputs_dir / mgr.get(job.id, s).output_name).is_file()
+
+
+def test_run_job_gemini_tempos_when_video_speed_not_100(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    seen = {}
+
+    def fake_gemini_synth(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        seen["render"] = dict(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"mp4-1x")
+
+    def fake_tempo(**kwargs):
+        seen["tempo"] = dict(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"mp4-sped")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.synthesize", fake_gemini_synth
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+    monkeypatch.setattr("roblox_viral.web.jobs.tempo_finished_video", fake_tempo)
+
+    job = mgr.create(
+        s,
+        "clip.mp4",
+        "One line only here.\n",
+        "Kore",
+        tts_provider="gemini",
+        video_speed=160,
+    )
+    mgr.run_job(s, job.id)
+    assert seen["render"]["video_speed"] == 100
+    render_out = Path(seen["render"]["output_path"])
+    assert render_out.name == "render_1x.mp4"
+    assert seen["tempo"]["video_speed"] == 160
+    assert seen["tempo"]["mode"] == "single"
+    assert Path(seen["tempo"]["input_path"]) == render_out
+    final = s.outputs_dir / mgr.get(job.id, s).output_name
+    assert Path(seen["tempo"]["output_path"]) == final
+    assert final.read_bytes() == b"mp4-sped"
+    assert not render_out.is_file()
+    assert mgr.get(job.id, s).status == "done"
+
+
+def test_run_job_edge_still_passes_configured_video_speed(tmp_path, monkeypatch):
+    """Regression: Edge must not force 100 or call tempo_finished_video."""
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    seen = {}
+
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        seen["render"] = kwargs
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    def boom_tempo(**kwargs):
+        raise AssertionError("tempo must not run for edge")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+    monkeypatch.setattr("roblox_viral.web.jobs.tempo_finished_video", boom_tempo)
+
+    job = mgr.create(
+        s,
+        "clip.mp4",
+        "One line only here.\n",
+        "en-US-EmmaNeural",
+        video_speed=175,
+    )
+    mgr.run_job(s, job.id)
+    assert seen["render"]["video_speed"] == 175
+    assert mgr.get(job.id, s).status == "done"
+
+
+def test_run_job_gemini_reddit_plans_at_100_then_tempos(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    s = _settings(tmp_path, monkeypatch)
+    videos_dir = s.videos_dir
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    (videos_dir / "a.mp4").write_bytes(b"vid")
+
+    mgr = JobManager()
+    seen = {}
+
+    def fake_gemini_synth(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 500), WordTiming("line", 500, 1000)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
+        seen["plan_speed"] = video_speed
+        from roblox_viral.reddit_clips import ClipSegment
+
+        return [
+            ClipSegment(path=paths[0], start_s=0.0, duration_s=1.0)
+            for _ in sentence_durations_s
+        ]
+
+    def fake_build(segments, output_path, *, work_dir=None):
+        Path(output_path).write_bytes(b"bg")
+
+    def fake_render_video(**kwargs):
+        seen["render"] = dict(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"mp4-1x")
+
+    def fake_card(*a, **k):
+        if a and hasattr(a[-1], "write_bytes"):
+            Path(a[-1]).write_bytes(b"png")
+        elif "output_path" in k:
+            Path(k["output_path"]).write_bytes(b"png")
+
+    def fake_tempo(**kwargs):
+        seen["tempo"] = dict(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"sped")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.synthesize", fake_gemini_synth
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.plan_reddit_sentence_clips", fake_plan)
+    monkeypatch.setattr("roblox_viral.web.jobs.build_reddit_background", fake_build)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_reddit_card", fake_card)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_hook_cover", fake_card)
+    monkeypatch.setattr("roblox_viral.web.jobs.probe_duration_seconds", lambda p: 10.0)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+    monkeypatch.setattr("roblox_viral.web.jobs.tempo_finished_video", fake_tempo)
+
+    job = mgr.create(
+        s,
+        "",
+        "One line only - here.\n",
+        "Kore",
+        mode="reddit",
+        tts_provider="gemini",
+        video_speed=200,
+    )
+    mgr.run_job(s, job.id)
+    assert seen["plan_speed"] == 100
+    assert seen["render"]["video_speed"] == 100
+    assert seen["tempo"]["video_speed"] == 200
+    assert seen["tempo"]["mode"] == "reddit"
+    assert mgr.get(job.id, s).status == "done"

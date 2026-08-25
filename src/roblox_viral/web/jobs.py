@@ -23,6 +23,7 @@ from roblox_viral.render import (
     probe_duration_seconds,
     render_still,
     render_video,
+    tempo_finished_video,
 )
 from roblox_viral.story import join_for_tts, split_sentences
 from roblox_viral.gemini_tts import (
@@ -304,6 +305,15 @@ class JobManager:
                 render_x_card(sentences[0], title_card_path)
 
             self._set_status(settings, record, "rendering")
+            render_video_speed = (
+                100 if record.tts_provider == "gemini" else record.video_speed
+            )
+            needs_tempo = (
+                record.tts_provider == "gemini" and record.video_speed != 100
+            )
+            pass1_path = (
+                job_dir / "render_1x.mp4" if needs_tempo else output_path
+            )
             if record.ephemeral:
                 media_path = (job_dir / record.source_name).resolve()
                 if (
@@ -323,7 +333,7 @@ class JobManager:
                 segments = plan_reddit_sentence_clips(
                     videos,
                     sent_durations,
-                    video_speed=record.video_speed,
+                    video_speed=render_video_speed,
                     durations=durations,
                 )
                 media_path = job_dir / "reddit_bg.mp4"
@@ -340,7 +350,7 @@ class JobManager:
                     image_path=media_path,
                     audio_path=narration_path,
                     ass_path=ass_path,
-                    output_path=output_path,
+                    output_path=pass1_path,
                     ken_burns=record.ken_burns,
                     work_dir=job_dir,
                 )
@@ -354,14 +364,26 @@ class JobManager:
                     video_path=media_path,
                     audio_path=narration_path,
                     ass_path=ass_path,
-                    output_path=output_path,
+                    output_path=pass1_path,
                     work_dir=job_dir,
                     overlay_path=overlay_path,
                     title_card_path=title_card_path,
                     title_card_until_s=title_card_until_s,
+                    video_speed=render_video_speed,
+                    mode=record.mode,
+                )
+
+            if needs_tempo:
+                tempo_finished_video(
+                    input_path=pass1_path,
+                    output_path=output_path,
                     video_speed=record.video_speed,
                     mode=record.mode,
                 )
+                try:
+                    pass1_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
             record.output_name = output_name
             if record.mode == "reddit" and title_card_download_name is not None:
