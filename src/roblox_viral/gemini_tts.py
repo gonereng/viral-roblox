@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import httpx
+import stable_whisper
 
 from roblox_viral.render import require_ffmpeg
 from roblox_viral.voice import WordTiming
@@ -15,6 +16,8 @@ from roblox_viral.voice import WordTiming
 GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 DEFAULT_GEMINI_VOICE = "Kore"
 DEFAULT_TTS_PROVIDER = "edge"
+DEFAULT_ALIGN_LANGUAGE = "de"
+DEFAULT_ALIGN_MODEL = "base"
 
 GEMINI_VOICES: tuple[str, ...] = (
     "Zephyr",
@@ -112,28 +115,45 @@ def _parse_sample_rate(mime: str) -> int:
     return 24000
 
 
-def align_words_with_whisper(audio_path: Path, text: str) -> list[WordTiming]:
-    """Force-align narration audio to produce WordTiming via faster-whisper."""
-    from faster_whisper import WhisperModel
-
-    model = WhisperModel("tiny", device="cpu", compute_type="int8")
-    segments, _info = model.transcribe(
-        str(audio_path),
-        word_timestamps=True,
-        initial_prompt=text[:400],
-        vad_filter=False,
+def align_words_with_whisper(
+    audio_path: Path,
+    text: str,
+    *,
+    language: str = DEFAULT_ALIGN_LANGUAGE,
+    model_size: str = DEFAULT_ALIGN_MODEL,
+) -> list[WordTiming]:
+    """Force-align known script to audio via stable-ts + faster-whisper."""
+    script = (text or "").strip()
+    if not script:
+        raise ValueError("TTS text is empty")
+    lang = (language or DEFAULT_ALIGN_LANGUAGE).strip() or DEFAULT_ALIGN_LANGUAGE
+    size = (model_size or DEFAULT_ALIGN_MODEL).strip() or DEFAULT_ALIGN_MODEL
+    model = stable_whisper.load_faster_whisper(
+        size, device="cpu", compute_type="int8"
     )
+    result = model.align(str(audio_path), script, language=lang)
     words: list[WordTiming] = []
-    for segment in segments:
-        for word in segment.words or []:
-            token = (word.word or "").strip()
-            if not token:
-                continue
-            start_ms = max(0, int(round(word.start * 1000)))
-            end_ms = max(start_ms + 1, int(round(word.end * 1000)))
-            words.append(WordTiming(text=token, start_ms=start_ms, end_ms=end_ms))
+    # WhisperResult.all_words() if available; else flatten segment.words
+    raw_words = (
+        result.all_words()
+        if hasattr(result, "all_words")
+        else [
+            w
+            for seg in (result.segments or [])
+            for w in (getattr(seg, "words", None) or [])
+        ]
+    )
+    for word in raw_words:
+        token = (getattr(word, "word", None) or getattr(word, "text", None) or "").strip()
+        if not token:
+            continue
+        start = float(word.start)
+        end = float(word.end)
+        start_ms = max(0, int(round(start * 1000)))
+        end_ms = max(start_ms + 1, int(round(end * 1000)))
+        words.append(WordTiming(text=token, start_ms=start_ms, end_ms=end_ms))
     if not words:
-        raise RuntimeError("Whisper alignment returned no words")
+        raise RuntimeError("Whisper align returned no words")
     for i in range(len(words) - 1):
         if words[i].end_ms < words[i + 1].start_ms:
             words[i] = WordTiming(
@@ -153,13 +173,17 @@ class GeminiTTSProvider:
         voice: str = DEFAULT_GEMINI_VOICE,
         *,
         align_fn=None,
+        align_language: str = DEFAULT_ALIGN_LANGUAGE,
+        align_model: str = DEFAULT_ALIGN_MODEL,
     ) -> None:
         key = (api_key or "").strip()
         if not key:
             raise ValueError("GEMINI_API_KEY is not configured")
         self.api_key = key
         self.voice = validate_gemini_voice(voice)
-        self._align_fn = align_fn or align_words_with_whisper
+        self._align_fn = align_fn
+        self.align_language = align_language
+        self.align_model = align_model
 
     def synthesize(self, text: str, output_path: Path | str) -> list[WordTiming]:
         script = (text or "").strip()
@@ -168,7 +192,14 @@ class GeminiTTSProvider:
         out = Path(output_path)
         pcm, sample_rate = self._generate_pcm(script)
         _pcm_to_mp3(pcm, sample_rate=sample_rate, output_mp3=out)
-        return self._align_fn(out, script)
+        if self._align_fn is not None:
+            return self._align_fn(out, script)
+        return align_words_with_whisper(
+            out,
+            script,
+            language=self.align_language,
+            model_size=self.align_model,
+        )
 
     def _generate_pcm(self, text: str) -> tuple[bytes, int]:
         url = (
