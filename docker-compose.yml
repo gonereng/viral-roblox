@@ -9,6 +9,9 @@ services:
       MEDIA_ROOT: /app/media
       API_KEY: ${API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      WHISPER_ALIGN_LANGUAGE: ${WHISPER_ALIGN_LANGUAGE:-de}
+      WHISPER_ALIGN_MODEL: ${WHISPER_ALIGN_MODEL:-base}
+      HF_HOME: /app/media/.cache/huggingface
       YOUTUBE_COOKIES: ${YOUTUBE_COOKIES:-/app/media/youtube_cookies.txt}
     volumes:
       - ./media:/app/media

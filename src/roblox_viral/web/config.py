@@ -38,6 +38,8 @@ class Settings:
     gemini_api_key: str = ""
     overlay_video: str = ""
     api_key: str = ""
+    whisper_align_language: str = "de"
+    whisper_align_model: str = "base"
 
     @property
     def sources_dir(self) -> Path:
@@ -100,6 +102,12 @@ class Settings:
             gemini_api_key=gemini_api_key,
             overlay_video=overlay_video,
             api_key=api_key,
+            whisper_align_language=(
+                os.environ.get("WHISPER_ALIGN_LANGUAGE", "de").strip() or "de"
+            ),
+            whisper_align_model=(
+                os.environ.get("WHISPER_ALIGN_MODEL", "base").strip() or "base"
+            ),
         )
 
 

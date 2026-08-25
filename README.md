@@ -102,7 +102,9 @@ Optional env vars:
 | `MEDIA_ROOT` | Upload/output directory (default: `./media`) |
 | `APP_PASSWORD` | Login password (required unless `APP_REQUIRE_PASSWORD=0`) |
 | `APP_SECRET` | Session signing key (random ephemeral value if unset) |
-| `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** |
+| `GEMINI_API_KEY` | Google Gemini API key used by **Generate story** and Gemini TTS |
+| `WHISPER_ALIGN_LANGUAGE` | Language code for stable-ts force-align on Gemini karaoke captions (default: `de`) |
+| `WHISPER_ALIGN_MODEL` | Whisper model size for Gemini force-align (default: `base`; e.g. `small`, `medium`) |
 | `API_KEY` | Shared secret for `/api/v1/videos*` (`X-API-Key`). Required for n8n integration. |
 | `OVERLAY_VIDEO` | Optional path to a greenscreen MP4. If unset, uses `MEDIA_ROOT/overlay.mp4` when present, otherwise the packaged `assets/overlay.mp4` shipped in the image. First 3.5s are chromakeyed, scaled to fit inside the full 1080×1920 frame, centered, and composited at the start of **Single** videos (audio ignored). |
 
@@ -114,7 +116,7 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 
 - `voice`, `story`, `type` (`single`|`reddit`|`leni`; `roblox` is rejected — use `single`)
 - optional `pitch` (−100…100, default 15), `speed` (50…200, default 130), and `video_speed` (50–200 for `single`/`leni`, 100–500 for `reddit`; default 100)
-- optional `tts_provider` (`edge`|`gemini`, default `edge`). For `gemini`, set `voice` to a Gemini name (e.g. `Kore`); requires `GEMINI_API_KEY`. Pitch/speed apply to Edge only.
+- optional `tts_provider` (`edge`|`gemini`, default `edge`). For `gemini`, set `voice` to a Gemini name (e.g. `Kore`); requires `GEMINI_API_KEY`. Gemini karaoke uses stable-ts force-align (default language German). Pitch/speed apply to Edge only.
 - for `single`: optional `media` **or** `source_name` (Library Sources slice). If neither is sent, a random Sources clip is chosen. Do not send both.
 - for `leni`: either file field `media` **or** text field `source_name` (Library image name)
 - for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)
@@ -171,7 +173,11 @@ Create a `.env` file (or export vars in your shell):
 APP_PASSWORD=your-password
 APP_SECRET=your-long-random-secret
 GEMINI_API_KEY=
+WHISPER_ALIGN_LANGUAGE=de
+WHISPER_ALIGN_MODEL=base
 ```
+
+The first Gemini TTS job may download the Whisper model into `media/.cache/huggingface` (persisted via the `./media` volume in Docker).
 
 Build and run:
 

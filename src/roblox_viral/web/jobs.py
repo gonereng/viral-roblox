@@ -276,6 +276,8 @@ class JobManager:
                 words = GeminiTTSProvider(
                     settings.gemini_api_key,
                     record.voice,
+                    align_language=settings.whisper_align_language,
+                    align_model=settings.whisper_align_model,
                 ).synthesize(tts_text, narration_path)
             else:
                 words = EdgeTTSProvider(

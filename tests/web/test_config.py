@@ -57,6 +57,28 @@ def test_api_key_from_env(tmp_path: Path, monkeypatch):
     assert settings.api_key == "n8n-secret"
 
 
+def test_whisper_align_defaults(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+    monkeypatch.setenv("APP_PASSWORD", "secret")
+    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+    monkeypatch.delenv("WHISPER_ALIGN_LANGUAGE", raising=False)
+    monkeypatch.delenv("WHISPER_ALIGN_MODEL", raising=False)
+    settings = Settings.from_env()
+    assert settings.whisper_align_language == "de"
+    assert settings.whisper_align_model == "base"
+
+
+def test_whisper_align_from_env(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+    monkeypatch.setenv("APP_PASSWORD", "secret")
+    monkeypatch.setenv("APP_SECRET", "dev-secret-key-at-least-32-chars!!")
+    monkeypatch.setenv("WHISPER_ALIGN_LANGUAGE", "en")
+    monkeypatch.setenv("WHISPER_ALIGN_MODEL", "small")
+    settings = Settings.from_env()
+    assert settings.whisper_align_language == "en"
+    assert settings.whisper_align_model == "small"
+
+
 def test_resolve_overlay_falls_back_to_packaged(tmp_path: Path, monkeypatch):
     from roblox_viral.web.config import resolve_overlay_video_path
 

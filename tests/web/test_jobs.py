@@ -521,17 +521,61 @@ def test_run_job_passes_video_speed_to_render(tmp_path, monkeypatch):
     assert mgr.get(job.id, s).status == "done"
 
 
+def test_run_job_gemini_passes_align_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("WHISPER_ALIGN_LANGUAGE", "en")
+    monkeypatch.setenv("WHISPER_ALIGN_MODEL", "small")
+    s = _settings(tmp_path, monkeypatch)
+    mgr = JobManager()
+    seen = {}
+
+    def fake_gemini_init(self, api_key, voice, *, align_fn=None, align_language="de", align_model="base"):
+        seen["align_language"] = align_language
+        seen["align_model"] = align_model
+        self.api_key = api_key
+        self.voice = voice
+        self._align_fn = align_fn
+
+    def fake_gemini_synth(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [WordTiming("One", 0, 100)]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_render_video(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.__init__", fake_gemini_init
+    )
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.GeminiTTSProvider.synthesize", fake_gemini_synth
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+    job = mgr.create(
+        s, "clip.mp4", "One line only here.\n", "Kore", tts_provider="gemini"
+    )
+    mgr.run_job(s, job.id)
+    assert seen["align_language"] == "en"
+    assert seen["align_model"] == "small"
+    assert mgr.get(job.id, s).status == "done"
+
+
 def test_run_job_gemini_uses_gemini_provider(tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     s = _settings(tmp_path, monkeypatch)
     mgr = JobManager()
     seen = {}
 
-    def fake_gemini_init(self, api_key, voice, *, align_fn=None):
+    def fake_gemini_init(self, api_key, voice, *, align_fn=None, align_language="de", align_model="base"):
         seen["api_key"] = api_key
         seen["voice"] = voice
         self.api_key = api_key
         self.voice = voice
+        self._align_fn = align_fn
 
     def fake_gemini_synth(self, text, output_path):
         Path(output_path).write_bytes(b"mp3")
