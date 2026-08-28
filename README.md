@@ -39,6 +39,14 @@ Options:
 | `--voice` | Edge TTS voice (default: `en-US-EmmaNeural`) |
 | `--keep-temp` | Keep temp narration/ASS files for debugging |
 
+Split a local gameplay file into Library 1-minute clips (`MEDIA_ROOT/sources`, default `media/sources`):
+
+```bash
+python slice_local.py path/to/gameplay.mp4
+```
+
+Names follow the filename stem (`gameplay-1.mp4`, `gameplay-2.mp4`, …). A leftover shorter than 60 seconds is discarded. Requires ffmpeg and `pip install -e .`.
+
 ## Pipeline
 
 1. Normalize story text
