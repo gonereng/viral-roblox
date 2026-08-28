@@ -244,6 +244,19 @@ def test_generate_page_has_hidden_title_card_download(tmp_path, monkeypatch):
     assert "Download title card" in r.text
 
 
+def test_generate_page_has_hidden_part_b_download(tmp_path, monkeypatch):
+    async def fake_voices():
+        return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
+
+    monkeypatch.setattr("roblox_viral.web.app.list_english_voices", fake_voices)
+    c = _client(tmp_path, monkeypatch)
+    _login(c)
+    r = c.get("/")
+    assert r.status_code == 200
+    assert 'id="download-b"' in r.text
+    assert "Download part B" in r.text
+
+
 def test_generate_page_has_tts_provider_toggle(tmp_path, monkeypatch):
     async def fake_voices():
         return [VoiceInfo("en-US-EmmaNeural", "en-US", "Female")]
@@ -405,6 +418,7 @@ def test_generate_page_has_three_mode_tab_controls(tmp_path, monkeypatch):
     assert 'id="reddit-hook-hint"' in r.text
     assert "first story line must be" in r.text.lower()
     assert "phrase - phrase" in r.text
+    assert "BREAK" in r.text
     assert 'id="tab-roblox"' not in r.text
     assert 'data-mode="roblox"' not in r.text
     assert ">Roblox</button>" not in r.text

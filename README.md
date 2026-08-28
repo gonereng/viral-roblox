@@ -127,9 +127,9 @@ Set `API_KEY` in `.env`. Header: `X-API-Key`.
 - optional `tts_provider` (`edge`|`gemini`, default `edge`). For `gemini`, set `voice` to a Gemini name (e.g. `Kore`); requires `GEMINI_API_KEY`. Gemini karaoke uses stable-ts force-align (default language German). Pitch/speed apply to Edge only.
 - for `single`: optional `media` **or** `source_name` (Library Sources slice). If neither is sent, a random Sources clip is chosen. Do not send both.
 - for `leni`: either file field `media` **or** text field `source_name` (Library image name)
-- for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`)
+- for `reddit`: story/voice/type only (background is built from the Library Videos pool; do not send `media` or `source_name`). The first story line must be `phrase - phrase`. Optionally add a line `BREAK` on its own, then a second story; Part A gets the title card and cover, Part B is a plain video without card/cover.
 
-Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download`; then download the cover with `GET /api/v1/videos/{id}/cover` (Reddit only; 404 for other types).
+Then poll `GET /api/v1/videos/{id}` and download `GET /api/v1/videos/{id}/download` (Part A); for Reddit jobs with a `BREAK` split, download Part B with `GET /api/v1/videos/{id}/download-b` (404 if no Part B). Download the cover with `GET /api/v1/videos/{id}/cover` (Reddit Part A only; 404 for other types).
 
 PowerShell / Windows (upload via `curl.exe` — works on PowerShell 5.1):
 

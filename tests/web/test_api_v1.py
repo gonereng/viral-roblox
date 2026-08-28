@@ -601,6 +601,93 @@ def test_download_unknown_404(tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
+def test_download_b_404_when_no_part_b(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    (settings.sources_dir / "clip.mp4").write_bytes(b"vid")
+    mgr: JobManager = c.app.state.job_manager
+    rec = mgr.create(
+        settings, "clip.mp4", "Hi.\n", "en-US-EmmaNeural", mode="single"
+    )
+    rec.status = "done"
+    rec.output_name = f"{rec.id}.mp4"
+    (settings.outputs_dir / rec.output_name).write_bytes(b"mp4")
+    with mgr._lock:
+        mgr._active_id = None
+    r = c.get(f"/api/v1/videos/{rec.id}/download-b", headers=_headers())
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Part B not found"
+
+
+def test_download_b_returns_part_b_file(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        rec.output_name_b = f"{job_id}-b.mp4"
+        settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+        (settings.outputs_dir / rec.output_name).write_bytes(b"part-a")
+        (settings.outputs_dir / rec.output_name_b).write_bytes(b"part-b")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    job_id = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Top - Bottom.\nBREAK\nSecond part.\n",
+            "type": "reddit",
+        },
+    ).json()["id"]
+    r = c.get(f"/api/v1/videos/{job_id}/download-b", headers=_headers())
+    assert r.status_code == 200
+    assert r.content == b"part-b"
+    assert r.headers.get("content-type", "").startswith("video/")
+
+
+def test_get_video_includes_output_name_b(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    settings = c.app.state.settings
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "bg.mp4").write_bytes(b"vid")
+
+    def fake_run(self, settings, job_id):
+        rec = self.get(job_id)
+        rec.status = "done"
+        rec.output_name = f"{job_id}.mp4"
+        rec.output_name_b = f"{job_id}-b.mp4"
+        settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+        (settings.outputs_dir / rec.output_name).write_bytes(b"part-a")
+        (settings.outputs_dir / rec.output_name_b).write_bytes(b"part-b")
+        with self._lock:
+            if self._active_id == job_id:
+                self._active_id = None
+
+    monkeypatch.setattr(JobManager, "run_job", fake_run)
+    job_id = c.post(
+        "/api/v1/videos",
+        headers=_headers(),
+        data={
+            "voice": "en-US-EmmaNeural",
+            "story": "Top - Bottom.\nBREAK\nSecond part.\n",
+            "type": "reddit",
+        },
+    ).json()["id"]
+    st = c.get(f"/api/v1/videos/{job_id}", headers=_headers())
+    assert st.status_code == 200
+    body = st.json()
+    assert "output_name_b" in body
+    assert body["output_name_b"] == f"{job_id}-b.mp4"
+
+
 def test_create_reddit_rejects_story_without_hook_dash(tmp_path, monkeypatch):
     c = _client(tmp_path, monkeypatch)
     settings = c.app.state.settings

@@ -194,6 +194,7 @@
   const resultEl = document.getElementById("result");
   const player = document.getElementById("player");
   const download = document.getElementById("download");
+  const downloadB = document.getElementById("download-b");
   const downloadCard = document.getElementById("download-card");
 
   let pollTimer = null;
@@ -219,12 +220,24 @@
     }
   }
 
-  function showResult(outputName, titleCardName) {
+  function showResult(outputName, titleCardName, outputNameB) {
     const url = `/media/outputs/${encodeURIComponent(outputName)}`;
     resultEl.hidden = false;
     player.src = url;
     download.href = url;
     download.download = outputName;
+    if (downloadB) {
+      if (outputNameB) {
+        const bUrl = `/media/outputs/${encodeURIComponent(outputNameB)}`;
+        downloadB.hidden = false;
+        downloadB.href = bUrl;
+        downloadB.download = outputNameB;
+      } else {
+        downloadB.hidden = true;
+        downloadB.removeAttribute("href");
+        downloadB.removeAttribute("download");
+      }
+    }
     if (downloadCard) {
       if (titleCardName) {
         const cardUrl = `/media/outputs/${encodeURIComponent(titleCardName)}`;
@@ -290,7 +303,11 @@
       stopPolling();
       syncGenerateEnabled();
       if (job.output_name) {
-        showResult(job.output_name, job.title_card_name || null);
+        showResult(
+          job.output_name,
+          job.title_card_name || null,
+          job.output_name_b || null
+        );
       }
       return;
     }

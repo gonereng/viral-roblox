@@ -229,6 +229,34 @@ def download_video(
     return FileResponse(path, media_type="video/mp4", filename=safe)
 
 
+@router.get("/videos/{video_id}/download-b")
+def download_video_b(
+    video_id: str,
+    request: Request,
+    _: None = Depends(require_api_key),
+) -> FileResponse:
+    settings = request.app.state.settings
+    mgr: JobManager = request.app.state.job_manager
+    record = mgr.get(video_id, settings)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if record.status == "error":
+        raise HTTPException(
+            status_code=422, detail=record.error or "Render failed"
+        )
+    if record.status != "done":
+        raise HTTPException(status_code=409, detail="Video not ready")
+    if not record.output_name_b:
+        raise HTTPException(status_code=404, detail="Part B not found")
+    safe = Path(record.output_name_b).name
+    if safe != record.output_name_b:
+        raise HTTPException(status_code=400, detail="Invalid output name")
+    path = (settings.outputs_dir / safe).resolve()
+    if not path.is_relative_to(settings.outputs_dir.resolve()) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Output file missing")
+    return FileResponse(path, media_type="video/mp4", filename=safe)
+
+
 @router.get("/videos/{video_id}/cover")
 def download_cover(
     video_id: str,
