@@ -12,6 +12,7 @@ from pathlib import Path
 
 from roblox_viral.captions import write_ass
 from roblox_viral.hook_cover import render_hook_cover, split_hook
+from roblox_viral.reddit_break import split_reddit_story
 from roblox_viral.reddit_card import first_sentence_end_s, render_reddit_card
 from roblox_viral.x_card import render_x_card
 from roblox_viral.reddit_clips import (
@@ -96,6 +97,7 @@ class JobRecord:
     created_slices: list[str] | None = None
     ephemeral: bool = False
     title_card_name: str | None = None
+    output_name_b: str | None = None
     tts_provider: str = DEFAULT_TTS_PROVIDER
 
 
@@ -154,11 +156,16 @@ class JobManager:
         else:
             resolve_source(settings, source_name)
             ken_burns = False
-        sentences = split_sentences(story)
-        if not sentences:
-            raise ValueError("Story is empty")
         if mode == "reddit":
+            part_a, _part_b = split_reddit_story(story)
+            sentences = split_sentences(part_a)
+            if not sentences:
+                raise ValueError("Story is empty")
             split_hook(sentences[0])
+        else:
+            sentences = split_sentences(story)
+            if not sentences:
+                raise ValueError("Story is empty")
 
         with self._lock:
             if self._active_id is not None:
@@ -221,6 +228,7 @@ class JobManager:
                 source_name=str(data.get("source_name") or ""),
                 voice=str(data.get("voice") or ""),
                 output_name=data.get("output_name"),
+                output_name_b=data.get("output_name_b"),
                 created_at=str(data["created_at"]),
                 kind=str(data.get("kind") or "render"),
                 pitch=int(data["pitch"]) if "pitch" in data else DEFAULT_PITCH,
@@ -259,142 +267,46 @@ class JobManager:
 
         try:
             story = self._stories[job_id]
-            sentences = split_sentences(story)
-            if not sentences:
-                raise ValueError("Story is empty")
+            if record.mode == "reddit":
+                part_a, part_b = split_reddit_story(story)
+            else:
+                part_a, part_b = story, None
 
             job_dir = settings.jobs_dir / job_id
             job_dir.mkdir(parents=True, exist_ok=True)
-            narration_path = job_dir / "narration.mp3"
-            ass_path = job_dir / "captions.ass"
+
             output_name = make_output_name(record.source_name or "reddit")
             output_path = settings.outputs_dir / output_name
 
-            self._set_status(settings, record, "synthesizing")
-            tts_text = join_for_tts(sentences)
-            if record.tts_provider == "gemini":
-                words = GeminiTTSProvider(
-                    settings.gemini_api_key,
-                    record.voice,
-                    align_language=settings.whisper_align_language,
-                    align_model=settings.whisper_align_model,
-                ).synthesize(tts_text, narration_path)
-            else:
-                words = EdgeTTSProvider(
-                    record.voice,
-                    rate=format_edge_rate(record.speed),
-                    pitch=format_edge_pitch(record.pitch),
-                ).synthesize(tts_text, narration_path)
-
-            self._set_status(settings, record, "captioning")
-            write_ass(words, ass_path, sentences=sentences)
-
-            title_card_path: Path | None = None
-            title_card_until_s: float | None = None
-            title_card_download_name: str | None = None
-            if record.mode == "reddit":
-                title_card_until_s = first_sentence_end_s(sentences, words)
-                title_card_path = job_dir / "reddit_card.png"
-                render_reddit_card(sentences[0], title_card_path, scale=1.0)
-                top, bottom = split_hook(sentences[0])
-                title_card_download_name = f"{Path(output_name).stem}-card.png"
-                settings.outputs_dir.mkdir(parents=True, exist_ok=True)
-                render_hook_cover(
-                    top,
-                    bottom,
-                    settings.outputs_dir / title_card_download_name,
-                )
-            elif record.mode == "single":
-                title_card_until_s = first_sentence_end_s(sentences, words)
-                title_card_path = job_dir / "x_card.png"
-                render_x_card(sentences[0], title_card_path)
-
-            self._set_status(settings, record, "rendering")
-            render_video_speed = (
-                100 if record.tts_provider == "gemini" else record.video_speed
+            card_name = self._render_story_part(
+                settings,
+                record,
+                story=part_a,
+                job_dir=job_dir,
+                output_path=output_path,
+                work_suffix="",
+                include_title_card=True,
             )
-            needs_tempo = (
-                record.tts_provider == "gemini"
-                and record.mode != "picture"
-                and record.video_speed != 100
-            )
-            pass1_path = (
-                job_dir / "render_1x.mp4" if needs_tempo else output_path
-            )
-            if record.ephemeral:
-                media_path = (job_dir / record.source_name).resolve()
-                if (
-                    not media_path.is_relative_to(job_dir.resolve())
-                    or not media_path.is_file()
-                ):
-                    raise FileNotFoundError(record.source_name)
-            elif record.mode == "picture":
-                media_path = resolve_image(settings, record.source_name)
-            elif record.mode == "reddit":
-                videos = [video.path for video in list_videos(settings)]
-                durations = {
-                    video_path: probe_duration_seconds(video_path)
-                    for video_path in videos
-                }
-                sent_durations = sentence_durations_s(sentences, words)
-                segments = plan_reddit_sentence_clips(
-                    videos,
-                    sent_durations,
-                    video_speed=render_video_speed,
-                    durations=durations,
-                )
-                media_path = job_dir / "reddit_bg.mp4"
-                build_reddit_background(
-                    segments,
-                    media_path,
-                    work_dir=job_dir,
-                )
-            else:
-                media_path = resolve_source(settings, record.source_name)
-
-            if record.mode == "picture":
-                render_still(
-                    image_path=media_path,
-                    audio_path=narration_path,
-                    ass_path=ass_path,
-                    output_path=pass1_path,
-                    ken_burns=record.ken_burns,
-                    work_dir=job_dir,
-                )
-            else:
-                overlay_path = (
-                    None
-                    if record.mode in ("reddit", "single")
-                    else settings.overlay_video_path
-                )
-                render_video(
-                    video_path=media_path,
-                    audio_path=narration_path,
-                    ass_path=ass_path,
-                    output_path=pass1_path,
-                    work_dir=job_dir,
-                    overlay_path=overlay_path,
-                    title_card_path=title_card_path,
-                    title_card_until_s=title_card_until_s,
-                    video_speed=render_video_speed,
-                    mode=record.mode,
-                )
-
-            if needs_tempo:
-                tempo_finished_video(
-                    input_path=pass1_path,
-                    output_path=output_path,
-                    video_speed=record.video_speed,
-                    mode=record.mode,
-                )
-                try:
-                    pass1_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
 
             record.output_name = output_name
-            if record.mode == "reddit" and title_card_download_name is not None:
-                record.title_card_name = title_card_download_name
+            if record.mode == "reddit" and card_name:
+                record.title_card_name = card_name
+
+            if part_b is not None:
+                output_name_b = f"{Path(output_name).stem}-b.mp4"
+                self._render_story_part(
+                    settings,
+                    record,
+                    story=part_b,
+                    job_dir=job_dir,
+                    output_path=settings.outputs_dir / output_name_b,
+                    work_suffix="_b",
+                    include_title_card=False,
+                )
+                record.output_name_b = output_name_b
+            else:
+                record.output_name_b = None
+
             self._set_status(settings, record, "done")
         except Exception as exc:
             record.error = str(exc)
@@ -403,6 +315,149 @@ class JobManager:
             with self._lock:
                 if self._active_id == job_id:
                     self._active_id = None
+
+    def _render_story_part(
+        self,
+        settings: Settings,
+        record: JobRecord,
+        *,
+        story: str,
+        job_dir: Path,
+        output_path: Path,
+        work_suffix: str,
+        include_title_card: bool,
+    ) -> str | None:
+        sentences = split_sentences(story)
+        if not sentences:
+            raise ValueError("Story is empty")
+
+        narration_path = job_dir / f"narration{work_suffix}.mp3"
+        ass_path = job_dir / f"captions{work_suffix}.ass"
+
+        self._set_status(settings, record, "synthesizing")
+        tts_text = join_for_tts(sentences)
+        if record.tts_provider == "gemini":
+            words = GeminiTTSProvider(
+                settings.gemini_api_key,
+                record.voice,
+                align_language=settings.whisper_align_language,
+                align_model=settings.whisper_align_model,
+            ).synthesize(tts_text, narration_path)
+        else:
+            words = EdgeTTSProvider(
+                record.voice,
+                rate=format_edge_rate(record.speed),
+                pitch=format_edge_pitch(record.pitch),
+            ).synthesize(tts_text, narration_path)
+
+        self._set_status(settings, record, "captioning")
+        write_ass(words, ass_path, sentences=sentences)
+
+        title_card_path: Path | None = None
+        title_card_until_s: float | None = None
+        title_card_download_name: str | None = None
+        if include_title_card:
+            if record.mode == "reddit":
+                title_card_until_s = first_sentence_end_s(sentences, words)
+                title_card_path = job_dir / f"reddit_card{work_suffix}.png"
+                render_reddit_card(sentences[0], title_card_path, scale=1.0)
+                top, bottom = split_hook(sentences[0])
+                title_card_download_name = f"{output_path.stem}-card.png"
+                settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+                render_hook_cover(
+                    top,
+                    bottom,
+                    settings.outputs_dir / title_card_download_name,
+                )
+            elif record.mode == "single":
+                title_card_until_s = first_sentence_end_s(sentences, words)
+                title_card_path = job_dir / f"x_card{work_suffix}.png"
+                render_x_card(sentences[0], title_card_path)
+
+        self._set_status(settings, record, "rendering")
+        render_video_speed = (
+            100 if record.tts_provider == "gemini" else record.video_speed
+        )
+        needs_tempo = (
+            record.tts_provider == "gemini"
+            and record.mode != "picture"
+            and record.video_speed != 100
+        )
+        pass1_path = (
+            job_dir / f"render_1x{work_suffix}.mp4" if needs_tempo else output_path
+        )
+        if record.ephemeral:
+            media_path = (job_dir / record.source_name).resolve()
+            if (
+                not media_path.is_relative_to(job_dir.resolve())
+                or not media_path.is_file()
+            ):
+                raise FileNotFoundError(record.source_name)
+        elif record.mode == "picture":
+            media_path = resolve_image(settings, record.source_name)
+        elif record.mode == "reddit":
+            videos = [video.path for video in list_videos(settings)]
+            durations = {
+                video_path: probe_duration_seconds(video_path)
+                for video_path in videos
+            }
+            sent_durations = sentence_durations_s(sentences, words)
+            segments = plan_reddit_sentence_clips(
+                videos,
+                sent_durations,
+                video_speed=render_video_speed,
+                durations=durations,
+            )
+            media_path = job_dir / f"reddit_bg{work_suffix}.mp4"
+            build_reddit_background(
+                segments,
+                media_path,
+                work_dir=job_dir,
+            )
+        else:
+            media_path = resolve_source(settings, record.source_name)
+
+        if record.mode == "picture":
+            render_still(
+                image_path=media_path,
+                audio_path=narration_path,
+                ass_path=ass_path,
+                output_path=pass1_path,
+                ken_burns=record.ken_burns,
+                work_dir=job_dir,
+            )
+        else:
+            overlay_path = (
+                None
+                if record.mode in ("reddit", "single")
+                else settings.overlay_video_path
+            )
+            render_video(
+                video_path=media_path,
+                audio_path=narration_path,
+                ass_path=ass_path,
+                output_path=pass1_path,
+                work_dir=job_dir,
+                overlay_path=overlay_path,
+                title_card_path=title_card_path,
+                title_card_until_s=title_card_until_s,
+                video_speed=render_video_speed,
+                mode=record.mode,
+            )
+
+        if needs_tempo:
+            tempo_finished_video(
+                input_path=pass1_path,
+                output_path=output_path,
+                video_speed=record.video_speed,
+                mode=record.mode,
+            )
+            try:
+                pass1_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        return title_card_download_name
 
     def _set_status(
         self, settings: Settings, record: JobRecord, status: JobStatus

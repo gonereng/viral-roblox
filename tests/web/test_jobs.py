@@ -1151,6 +1151,126 @@ def test_run_job_edge_still_passes_configured_video_speed(tmp_path, monkeypatch)
     assert mgr.get(job.id, s).status == "done"
 
 
+def test_create_reddit_validates_hook_on_part_a_only(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "one.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    story = "Good Hook - Title\nBody A.\nBREAK\nNo dash needed here.\nMore B.\n"
+    job = mgr.create(s, "", story, "en-US-EmmaNeural", mode="reddit")
+    assert job.mode == "reddit"
+
+
+def test_create_reddit_rejects_bad_hook_even_with_break(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "one.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    with pytest.raises(ValueError, match="phrase - phrase"):
+        mgr.create(
+            s,
+            "",
+            "Bad first line\nBREAK\nFine B.\n",
+            "en-US-EmmaNeural",
+            mode="reddit",
+        )
+
+
+def _reddit_break_mocks(monkeypatch, seen):
+    def fake_synthesize(self, text, output_path):
+        Path(output_path).write_bytes(b"mp3")
+        return [
+            WordTiming("Hook", 0, 200),
+            WordTiming("One", 200, 500),
+            WordTiming("Second", 500, 800),
+            WordTiming("A", 800, 1000),
+            WordTiming("First", 1000, 1300),
+            WordTiming("B", 1300, 1600),
+            WordTiming("sentence", 1600, 1900),
+            WordTiming("Second", 1900, 2200),
+            WordTiming("B", 2200, 2500),
+        ]
+
+    def fake_write_ass(words, ass_path, sentences=None):
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+
+    def fake_probe(path):
+        return 12.0 if Path(path).name.startswith("narration") else 8.0
+
+    def fake_plan(paths, sentence_durations_s, *, video_speed, durations):
+        return ["planned-segment"]
+
+    def fake_build(segments, output_path, *, work_dir=None):
+        Path(output_path).write_bytes(b"background")
+
+    def fake_render_reddit_card(title, output_path, *, scale=2.0):
+        Path(output_path).write_bytes(b"png")
+
+    def fake_render_hook_cover(top, bottom, output_path, *, template_path=None):
+        Path(output_path).write_bytes(b"hook-png")
+
+    def fake_render_video(**kwargs):
+        seen["renders"].append(dict(kwargs))
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+
+    monkeypatch.setattr(
+        "roblox_viral.web.jobs.EdgeTTSProvider.synthesize", fake_synthesize
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.write_ass", fake_write_ass)
+    monkeypatch.setattr(jobs_module, "probe_duration_seconds", fake_probe, raising=False)
+    monkeypatch.setattr(
+        jobs_module, "plan_reddit_sentence_clips", fake_plan, raising=False
+    )
+    monkeypatch.setattr(
+        jobs_module, "build_reddit_background", fake_build, raising=False
+    )
+    monkeypatch.setattr(
+        jobs_module, "render_reddit_card", fake_render_reddit_card, raising=False
+    )
+    monkeypatch.setattr(
+        jobs_module, "render_hook_cover", fake_render_hook_cover, raising=False
+    )
+    monkeypatch.setattr("roblox_viral.web.jobs.render_video", fake_render_video)
+
+
+def test_run_job_reddit_break_writes_two_outputs(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "one.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    seen = {"renders": []}
+    _reddit_break_mocks(monkeypatch, seen)
+
+    story = "Hook - One\nSecond A.\nBREAK\nFirst B sentence.\nSecond B.\n"
+    job = mgr.create(s, "", story, "en-US-EmmaNeural", mode="reddit")
+    mgr.run_job(s, job.id)
+    rec = mgr.get(job.id, s)
+    assert rec.status == "done"
+    assert rec.output_name and rec.output_name.endswith(".mp4")
+    assert rec.output_name_b == f"{Path(rec.output_name).stem}-b.mp4"
+    assert len(seen["renders"]) == 2
+    assert seen["renders"][0]["title_card_path"] is not None
+    assert seen["renders"][1]["title_card_path"] is None
+    assert (s.outputs_dir / rec.output_name).is_file()
+    assert (s.outputs_dir / rec.output_name_b).is_file()
+
+
+def test_run_job_reddit_without_break_single_output(tmp_path, monkeypatch):
+    s = _settings(tmp_path, monkeypatch)
+    (s.videos_dir / "one.mp4").write_bytes(b"vid")
+    mgr = JobManager()
+    seen = {"renders": []}
+    _reddit_break_mocks(monkeypatch, seen)
+
+    story = "Hook - One\nSecond A.\n"
+    job = mgr.create(s, "", story, "en-US-EmmaNeural", mode="reddit")
+    mgr.run_job(s, job.id)
+    rec = mgr.get(job.id, s)
+    assert rec.status == "done"
+    assert rec.output_name and rec.output_name.endswith(".mp4")
+    assert rec.output_name_b is None
+    assert len(seen["renders"]) == 1
+    assert seen["renders"][0]["title_card_path"] is not None
+    assert (s.outputs_dir / rec.output_name).is_file()
+
+
 def test_run_job_gemini_reddit_plans_at_100_then_tempos(tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     s = _settings(tmp_path, monkeypatch)
